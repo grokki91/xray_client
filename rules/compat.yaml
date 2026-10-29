@@ -1,0 +1,54 @@
+# Совместимость ядер клиентов с правилом X25519MLKEM768 сервера (REALITY ≥ v26.9.9).
+# Источник — grokki91/xray, .claude/skills/xray-dpi/references/landscape.md (проверено 2026-10-28).
+# Правка факта — в обоих местах, с датой (AGENTS.md: «инструкции меняются вместе с кодом»).
+# Когда сервер доступен через мост, клиент доверяет серверу (S1.mlkem_rule), а не этой таблице.
+
+updated: "2026-10-28"
+source: "landscape.md#Клиенты"
+
+server:
+  # С этой версии REALITY отдаёт сайту-маске ClientHello без X25519MLKEM768 перед X25519.
+  mlkem_rule_from: "26.9.9"
+
+# Отпечатки uTLS в ядре Xray: с какой версии ядра пресет шлёт X25519MLKEM768.
+# null — пресет его не шлёт ни в какой версии (или не браузерный).
+xray_fingerprints:
+  chrome:  {mlkem_from: "25.7.26"}
+  firefox: {mlkem_from: "26.3.27"}
+  safari:  {mlkem_from: "26.3.27"}
+  edge:    {mlkem_from: null}
+  ios:     {mlkem_from: null}
+  android: {mlkem_from: null}
+  "360":   {mlkem_from: null}
+  qq:      {mlkem_from: null}
+  random:           {mlkem_from: null, random: true}
+  randomized:       {mlkem_from: null, random: true}
+  randomizednoalpn: {mlkem_from: null, random: true}
+
+# Ядра Xray с открытой XTLS/Xray-core#6797 (сборки Go 1.27): при зависших хендшейках плодят
+# соединения. Рабочий откат — v26.7.28.
+xray_bug6797_from: "26.9.8"
+
+clients:
+  hiddify:
+    # Все релизы 4.x: ядро hiddify-sing-box (форк sing-box 1.13) вырезает X25519MLKEM768
+    # (common/tls/reality_client.go). Исправление — ветка v5, в релиз не вышло.
+    - versions: "<5.0.0"
+      core: "hiddify-sing-box"
+      core_family: "sing-box"
+      mlkem: false
+      note: "Hiddify 4.x: ядро sing-box вырезает X25519MLKEM768 из ClientHello REALITY"
+    - versions: ">=5.0.0"
+      core: "hiddify-sing-box v5"
+      core_family: "sing-box"
+      mlkem: null   # неизвестно до релиза: частичная поддержка
+      note: "Hiddify 5.x: ветка с опцией key_share X25519MLKEM768 — проверить на машине"
+  v2rayn:
+    # Ядро определяет профиль (CoreType) или таблица CoreTypeItem; по умолчанию Xray.
+    cores:
+      Xray:     {family: "xray"}
+      sing_box: {family: "sing-box", mlkem: false, note: "sing-box (в т. ч. v1.14.4) вырезает X25519MLKEM768 — SagerNet/sing-box#4520"}
+      mihomo:   {family: "mihomo", mlkem: false, note: "mihomo шлёт X25519MLKEM768 только с опцией support-x25519mlkem768"}
+
+# Рекомендуемые клиенты (текст действия): ядро Xray, свежая версия.
+recommend: "v2rayN с ядром Xray от v25.7.26 и fp=chrome (firefox — ядро от v26.3.27)"

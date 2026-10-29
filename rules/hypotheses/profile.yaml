@@ -1,0 +1,107 @@
+# Гипотезы: профиль (L5). Сверка с сервером — S1.match_* (HMAC на соли сессии, мост).
+
+- code: profile.import
+  likely:
+    - ["C3.issues~addr.empty|addr.format|security.not_reality|protocol.not_vless"]
+  title: "Профиль испорчен при импорте: {C3.issues_text}"
+  why: "В профиле клиента не хватает обязательных полей или они испорчены (лишние пробелы, обрезанная строка)."
+  actions: ["Удалить профиль и импортировать заново: `sudo xm uri <имя>` → копировать целиком"]
+
+- code: profile.uuid
+  confirmed:
+    - ["S1.match_uuid=false"]
+  likely:
+    - ["C3.issues~uuid.empty|uuid.space|uuid.format"]
+  excluded: ["S1.match_uuid=true"]
+  title: "Профиль: UUID не совпадает ни с одним клиентом сервера"
+  why: "UUID профиля не найден среди клиентов сервера или испорчен: REALITY пропускает соединение, а VLESS закрывает его."
+  actions: ["`sudo xm clients` — есть ли клиент", "Импортировать профиль заново: `sudo xm uri <имя>`"]
+
+- code: profile.pbk
+  confirmed:
+    - ["S1.match_pbk=false"]
+    - ["S3.rd_r=key", "S3.ssh=true"]
+  likely:
+    - ["C3.issues~pbk.empty|pbk.format"]
+    - ["S3.code=profile.key"]
+  excluded: ["S1.match_pbk=true"]
+  title: "Профиль: публичный ключ REALITY (pbk) не от этого сервера"
+  why: "Ключ в профиле не совпадает с ключом сервера: REALITY не узнаёт клиента и отдаёт соединение сайту-маске."
+  actions: ["Импортировать профиль заново: `sudo xm uri <имя>`", "Ключ сервера: `sudo xm pubkey`"]
+
+- code: profile.sid
+  confirmed:
+    - ["S1.match_sid=false"]
+    - ["S3.rd_r=sid"]
+  likely:
+    - ["C3.issues~sid.format"]
+    - ["S3.code=profile.sid"]
+  excluded: ["S1.match_sid=true"]
+  title: "Профиль: shortId не из списка сервера (профиль старый)"
+  why: "shortId профиля нет в shortIds сервера: REALITY отдаёт соединение сайту-маске."
+  actions: ["Импортировать профиль заново: `sudo xm uri <имя>`"]
+
+- code: profile.sni
+  confirmed:
+    - ["S1.match_sni=false"]
+    - ["S3.rd_r=sni", "S3.ssh=true"]
+  likely:
+    - ["C3.issues~sni.empty"]
+    - ["S3.code=profile.sni"]
+  excluded: ["S1.match_sni=true"]
+  title: "Профиль: SNI не из serverNames сервера"
+  why: "SNI профиля не совпадает с маской сервера: REALITY отдаёт соединение сайту-маске."
+  actions: ["Импортировать профиль заново: `sudo xm uri <имя>` (после смены маски `xm set-sni` старые профили не работают)"]
+
+- code: profile.path
+  confirmed:
+    - ["S1.match_path=false"]
+  likely:
+    - ["C3.issues~path.empty"]
+  excluded: ["S1.match_path=true"]
+  title: "Профиль: путь XHTTP не совпадает с сервером"
+  why: "REALITY пропускает соединение, но запрос XHTTP по чужому пути сервер не принимает."
+  actions: ["Импортировать профиль заново: `sudo xm uri <имя>`"]
+
+- code: profile.port
+  confirmed:
+    - ["S1.match_port=false"]
+  likely:
+    - ["C3.issues~port.invalid"]
+  excluded: ["S1.match_port=true", "P2.outcome=mask_cert"]
+  title: "Профиль: порт не совпадает с публичным портом сервера"
+  why: "Порт в профиле не тот, на котором сервер принимает REALITY."
+  actions: ["Импортировать профиль заново: `sudo xm uri <имя>`"]
+
+- code: profile.transport
+  confirmed:
+    - ["S1.match_transport=false"]
+  likely:
+    - ["C3.issues~transport.other|transport.empty|flow.xhttp|mode.unknown"]
+  excluded: ["S1.match_transport=true"]
+  title: "Профиль: транспорт не тот, что на сервере ({C3.transport})"
+  why: "Сервер принимает XHTTP (и, если включён, TCP/Vision на втором inbound); транспорт или flow профиля этому не соответствуют."
+  actions: ["Импортировать профиль заново: `sudo xm uri <имя>`", "Vision (flow) — только с TCP-профилем (`sudo xm add-tcp`)"]
+
+- code: profile.reality
+  likely:
+    - ["P3.outcome=real_cert", "P2.outcome=mask_cert"]
+    - ["S3.code=profile.changed"]
+  possible:
+    - ["P3.outcome=real_cert"]
+  excluded: ["P3.outcome=ok", "S1.match_pbk=true"]
+  title: "Профиль не принят REALITY: ключ, shortId или SNI не совпадают с сервером"
+  why: "Сервер жив и отдаёт сайт-маску (обычный TLS-зонд получил её сертификат), но эталонное ядро Xray с профилем пользователя (fp=chrome, X25519MLKEM768 есть) тоже получило сертификат маски вместо тоннеля. Значит, сервер не узнал профиль."
+  alternative: "То же даст профиль со старым ключом после переустановки сервера и, реже, часы ПК при maxTimeDiff на сервере. Что именно не совпало — покажет сверка хэшей через мост."
+  actions: ["Импортировать профиль заново: `sudo xm uri <имя>`"]
+  next_checks: [S1, S3]
+
+- code: profile.user
+  likely:
+    - ["P3.outcome=closed_after_handshake"]
+    - ["S3.code=profile.user"]
+  excluded: ["P3.outcome=ok"]
+  title: "Профиль: REALITY принят, но сервер сразу закрыл соединение — UUID или путь"
+  why: "Рукопожатие с сервером прошло, но первый запрос через тоннель оборвался: так выглядит UUID, которого нет на сервере, или неверный путь XHTTP."
+  actions: ["`sudo xm clients` — есть ли клиент", "Импортировать профиль заново: `sudo xm uri <имя>`"]
+  next_checks: [S1]

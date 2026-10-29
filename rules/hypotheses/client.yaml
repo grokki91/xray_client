@@ -1,0 +1,117 @@
+# Гипотезы: клиентское приложение (L0) и отпечаток профиля.
+# CX — сводная улика активного клиента (какое ядро делает REALITY и шлёт ли оно X25519MLKEM768).
+
+- code: client.service.down
+  likely:
+    - ["C6.core_failed>=1"]
+    - ["C6.port_busy>=1"]
+  possible:
+    - ["C8.client_running=true", "C8.core_listening=false"]
+  excluded: ["S3.own=true", "C8.core_listening=true"]
+  title: "{CX.client_name}: ядро или служба не запустились — попытки подключения нет"
+  why: "В логах клиента — ошибка запуска ядра или занятый порт; к серверу в этом случае не уходит ничего, а приложение показывает «Подключение…» или «таймаут»."
+  alternative: "Если клиент просто выключен (не нажато «Подключить») — это не сбой; повторить диагностику при включённом клиенте."
+  actions:
+    - "Полностью закрыть клиент (в трее тоже), проверить, что процесса нет в Диспетчере задач, и запустить снова"
+    - "Если порт занят — закрыть другой VPN/прокси-клиент или перезагрузить ПК"
+    - "Добавить папку клиента в исключения антивируса"
+  next_checks: [C6, C7]
+
+- code: client.tun.failed
+  likely:
+    - ["C6.tun_error>=1"]
+  possible:
+    - ["CX.tun=true", "C8.tun_adapter=false", "C8.client_running=true"]
+  excluded: ["S3.own=true"]
+  title: "{CX.client_name}: режим TUN не поднялся"
+  why: "Клиент в режиме VPN (TUN), но сетевого адаптера TUN нет или в логе ошибка его настройки (нужны права администратора, мешает другой VPN)."
+  actions:
+    - "Запустить клиент от имени администратора (TUN требует прав)"
+    - "Отключить другие VPN-клиенты и их адаптеры"
+    - "Проверить в режиме «Системный прокси»: если там работает — дело в TUN"
+  next_checks: [C6]
+
+- code: client.config.convert
+  likely:
+    - ["C5.differs~address|port|uuid|pbk|sid|sni|path|transport|fp"]
+  title: "{CX.client_name}: профиль в клиенте отличается от исходного URI"
+  why: "Вставленный URI и профиль, который клиент хранит у себя, расходятся в полях: {C5.differs}. Клиент сконвертировал или обрезал профиль при импорте."
+  actions:
+    - "Удалить профиль в клиенте и импортировать заново (`sudo xm qr <имя>` или `sudo xm uri <имя>`)"
+    - "Если поля снова расходятся — клиент не поддерживает эти параметры (часто: XHTTP mode/extra в Hiddify)"
+
+- code: client.core.mlkem
+  confirmed:
+    - ["CX.core_mlkem=false", "P3.outcome=ok", "P3m.outcome=real_cert"]
+    - ["S3.rd_r=mlkem", "S3.ssh=true"]
+    - ["S3.code=client.core", "S3.live=true", "S3.ssh=true"]
+    - ["CX.core_mlkem=false", "C7.hello_seen=true", "C7.mlkem=false", "S1.mlkem_rule=true"]
+  likely:
+    - ["CX.core_mlkem=false", "P3.outcome=ok"]
+    - ["CX.core_mlkem=false", "S1.mlkem_rule=true"]
+    - ["CX.core_mlkem=false", "S2.ver_xray_mlkem=true"]
+    - ["S3.code=client.core"]
+  possible:
+    - ["CX.core_mlkem=false"]
+  excluded: ["S1.mlkem_rule=false", "P3m.outcome=ok", "S3.rd_r=ok"]
+  title: "{CX.client_name}: ядро {CX.core} не шлёт X25519MLKEM768 — сервер отдаёт его ClientHello сайту-маске"
+  why: "REALITY на сервере с Xray v26.9.9 принимает только ClientHello, где X25519MLKEM768 идёт перед X25519. Ядро {CX.core} эту долю вырезает: сервер молча отдаёт соединение сайту-маске, клиент получает настоящий сертификат маски и пишет «таймаут». Эталонное ядро Xray с тем же профилем при этом подключается."
+  alternative: "Если сервер на Xray старше v26.9.9 — правила нет, и причина в другом: тогда эталон без X25519MLKEM768 тоже прошёл бы (проверка P3m)."
+  actions:
+    - "Сменить клиент на ядро Xray: {COMPAT.recommend}"
+    - "Профиль в новый клиент: `sudo xm uri <имя>` или `sudo xm qr <имя>`"
+    - "Hiddify ждать с исправлением (ветка v5) — в релизе 4.x его нет"
+  next_checks: [S1, S3]
+
+- code: client.core.old
+  confirmed:
+    - ["S3.rd_r=ver"]
+    - ["S3.code=client.version"]
+  title: "{CX.client_name}: версия ядра вне minClientVer/maxClientVer сервера"
+  why: "Окно `xm doctor`: REALITY отказал по версии ядра клиента."
+  actions: ["Обновить ядро клиента (v2rayN: «Проверить обновления» → Xray-core)", "Или убрать minClientVer/maxClientVer из realitySettings сервера"]
+
+- code: profile.fp
+  confirmed:
+    - ["CX.core_mlkem=true", "CX.fp_mlkem=false", "P3.outcome=ok", "P3m.outcome=real_cert"]
+  likely:
+    - ["C3.issues~fp.empty|fp.unknown"]
+    - ["CX.core_mlkem=true", "CX.fp_mlkem=false", "S1.mlkem_rule=true"]
+    - ["CX.core_mlkem=true", "CX.fp_mlkem=false", "P3.outcome=ok"]
+  possible:
+    - ["CX.core_mlkem=true", "CX.fp_mlkem=false"]
+  excluded: ["S1.mlkem_rule=false", "P3m.outcome=ok"]
+  title: "Профиль: отпечаток fp={CX.fp} без X25519MLKEM768 — сервер его не пускает"
+  why: "Ядро клиента умеет X25519MLKEM768, но выбранный пресет отпечатка его не шлёт (или пресет пуст). REALITY ≥ v26.9.9 отдаёт такой ClientHello сайту-маске."
+  actions:
+    - "В профиле клиента fp=chrome (firefox — если у оператора chrome «замораживается», ядро Xray от v26.3.27)"
+    - "Во время заморозки отпечаток не менять: это продлевает её до 10 минут"
+  next_checks: [S1]
+
+- code: client.clock
+  confirmed:
+    - ["S3.rd_r=time"]
+    - ["S3.code=client.clock"]
+  likely:
+    - ["|W7.offset_s|>=600"]
+  possible:
+    - ["|W7.offset_s|>=60"]
+  title: "Часы ПК расходятся с точным временем на {W7.offset_s} с"
+  why: "Время ПК отличается от времени эталонных серверов. REALITY с maxTimeDiff и проверка сертификатов чувствительны к часам."
+  actions: ["Параметры → Время и язык → «Установить время автоматически» и «Синхронизировать»", "Проверить часовой пояс"]
+
+- code: client.socks.exposed
+  kind: finding
+  confirmed:
+    - ["C9.exposed=true"]
+  title: "Локальный прокси клиента слушает все интерфейсы (порты {C9.ports})"
+  why: "Любое устройство в локальной сети (и любое приложение на ПК) может ходить через этот прокси и узнать адрес сервера. Найденный адрес банят."
+  actions: ["Hiddify: выключить «Разрешить подключения из LAN»", "v2rayN: снять «Разрешить подключения из локальной сети»"]
+
+- code: client.core.bug6797
+  kind: finding
+  possible:
+    - ["CX.bug6797=true"]
+  title: "Ядро Xray {CX.core_version} несёт открытую ошибку XTLS/Xray-core#6797"
+  why: "Ядра v26.9.8+ при зависающих хендшейках плодят соединения — это и есть признак для ТСПУ («много параллельных TLS»)."
+  actions: ["Рабочий откат: ядро Xray v26.7.28 в `bin\\xray` v2rayN (fp=chrome)"]

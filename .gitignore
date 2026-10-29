@@ -1,0 +1,22 @@
+# Сборка
+/bin/
+/dist/
+*.exe
+*.syso
+cmd/xdiag-ui/build/
+# Локальные данные и захваты — никогда в репозиторий
+*.etl
+*.pcap
+*.pcapng
+*.dpapi
+/local/
+/testdata/local/
+doctor*.json
+!testdata/server/doctor*.json
+health*.json
+!testdata/server/health*.json
+facts*.json
+!testdata/server/facts*.json
+# IDE
+.idea/
+.vscode/

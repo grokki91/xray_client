@@ -1,0 +1,84 @@
+# Гипотезы: интернет, профиль, сервер. Синтаксис предикатов — internal/evidence (Eval).
+# Уровни: confirmed — наблюдение с двух сторон или воспроизведение; likely — наблюдение с одной
+# стороны и эталон снял альтернативы; possible — косвенно (таблица версий, лог, слова);
+# excluded — есть противоречащая улика. Внутри группы — «и», между группами — «или».
+
+- code: lan.noinet
+  confirmed:
+    - ["N1.ok=false", "N4.ok=false"]
+  likely:
+    - ["N1.ok=false"]
+  excluded: ["N1.ok=true"]
+  title: "Интернета нет: не открылся ни один эталонный сайт"
+  why: "Ни проверка интернета Windows, ни generate_204, ни российский эталон не ответили. До VPN-сервера дело не доходит."
+  alternative: "Если сайты в браузере при этом открываются — их открывает VPN-клиент в режиме TUN, а прямой путь закрыт: тогда это сбой сети или настроек TUN клиента."
+  actions:
+    - "Проверить кабель или Wi-Fi, перезагрузить роутер"
+    - "Выключить VPN-клиент и проверить, открываются ли сайты без него"
+    - "В публичной сети (кафе, отель) — открыть любой сайт в браузере: может требоваться вход на портал"
+
+- code: profile.missing
+  likely:
+    - ["C3.found=false"]
+  excluded: ["C3.found=true"]
+  title: "Профиль сервера не найден: проверять нечего"
+  why: "Ни в Hiddify, ни в v2rayN не нашлось профиля VLESS+REALITY, и он не задан в настройках приложения."
+  actions:
+    - "Вставить профиль (vless://…) в «Настройки → Профиль»: он хранится только на этом ПК, зашифрованным"
+    - "Если v2rayN портативный — указать его папку в «Настройки → Папка v2rayN»"
+    - "Профиль с сервера: `sudo xm uri <имя>`"
+
+- code: server.listen
+  confirmed:
+    - ["S1.self_r=fail", "S1.self_at=listen"]
+    - ["S3.code=server.listen"]
+  likely:
+    - ["P1.outcome=refused", "N1.ok=true"]
+  excluded: ["P2.outcome=mask_cert", "P3.outcome=ok|real_cert"]
+  title: "Сервер: Xray не слушает публичный порт"
+  why: "На порт сервера приходит отказ (RST): соединение доходит, но принимать его некому."
+  alternative: "RST вместо сервера может прислать файрвол роутера или провайдера; подтвердит самопроверка сервера (мост) или `sudo xm doctor`."
+  actions:
+    - "`sudo systemctl status xray --no-pager`"
+    - "`sudo journalctl -u xray -n 30 --no-pager`"
+    - "`sudo xm restart`"
+  next_checks: [S1]
+
+- code: server.dns
+  confirmed:
+    - ["S1.self_r=fail", "S1.self_at=dns"]
+    - ["S3.code=server.dns"]
+  title: "Сервер: домен-маска не резолвится — REALITY некуда отдать соединение"
+  why: "Самопроверка сервера: имя из serverNames не резолвится с сервера."
+  actions: ["`sudo xm watchdog now`", "`sudo xm diag-dpi`"]
+
+- code: server.egress
+  confirmed:
+    - ["S1.self_r=fail", "S1.self_at=egress"]
+    - ["S3.code=server.egress"]
+  title: "Сервер: нет выхода в интернет"
+  why: "Самопроверка сервера: запрос наружу не прошёл ни через тоннель, ни напрямую."
+  actions: ["`curl -sI --max-time 5 https://www.google.com/generate_204` на сервере", "Вопрос хостеру"]
+
+- code: server.handshake
+  confirmed:
+    - ["S1.self_r=fail", "S1.self_at=handshake"]
+    - ["S3.code=server.handshake"]
+  title: "Сервер: собственный клиент на петле не проходит рукопожатие"
+  why: "Самопроверка сервера: VLESS+REALITY с самого сервера не прошёл."
+  actions: ["`sudo xray -test -config /usr/local/etc/xray/config.json`", "`sudo xm selftest`"]
+
+- code: server.firewall
+  confirmed:
+    - ["S1.ufw=closed"]
+    - ["S3.code=server.firewall"]
+  title: "Сервер: публичный порт закрыт в UFW"
+  why: "UFW на сервере активен, правила ALLOW для публичного порта нет — SYN отбрасывается."
+  actions: ["`sudo ufw allow 443/tcp` (порт — публичный порт установки)"]
+
+- code: server.syn
+  confirmed:
+    - ["S3.code=server.syn"]
+  title: "Сервер: SYN доходит, но сервер не отвечает"
+  why: "Окно `xm doctor`: попытка из сети этого ПК пришла, SYN-ACK не ушёл."
+  actions: ["`sudo ufw status verbose`", "`sudo ss -tlnp`"]

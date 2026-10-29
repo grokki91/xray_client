@@ -1,0 +1,78 @@
+# Таксономия причин и каталог проверок (docs/architecture.md §1.5, §6, §7.1).
+# Порядок причин — стек: сначала то, без чего остальное не важно (интернет, профиль),
+# затем клиент → профиль → ОС → путь → сервер → за тоннелем. Вердикт — первая причина
+# с уровнем «вероятно» или выше.
+
+layers:
+  L0: Клиентское приложение
+  L1: Windows
+  L2: Локальная сеть
+  L3: Путь до сервера
+  L4: Сервер
+  L5: Профиль
+  L6: За тоннелем
+  "-": Итог
+
+codes:
+  lan.noinet:            {layer: L2, order: 100, title: "Нет интернета"}
+  profile.missing:       {layer: L5, order: 110, title: "Профиль не найден"}
+  server.listen:         {layer: L4, order: 150, title: "Сервер: Xray не слушает порт"}
+  server.dns:            {layer: L4, order: 151, title: "Сервер: маска не резолвится"}
+  server.egress:         {layer: L4, order: 152, title: "Сервер: нет выхода в интернет"}
+  server.handshake:      {layer: L4, order: 153, title: "Сервер: своё рукопожатие не проходит"}
+  server.firewall:       {layer: L4, order: 154, title: "Сервер: порт закрыт в UFW"}
+  server.syn:            {layer: L4, order: 155, title: "Сервер: SYN доходит, ответа нет"}
+  client.service.down:   {layer: L0, order: 200, title: "Клиент: ядро или служба не запустились"}
+  client.tun.failed:     {layer: L0, order: 210, title: "Клиент: TUN не поднялся"}
+  client.config.convert: {layer: L0, order: 220, title: "Клиент: профиль сконвертирован с ошибкой"}
+  client.core.mlkem:     {layer: L0, order: 250, title: "Клиент: ядро без X25519MLKEM768"}
+  client.core.old:       {layer: L0, order: 255, title: "Клиент: версия ядра не принимается сервером"}
+  profile.fp:            {layer: L5, order: 260, title: "Профиль: отпечаток fp"}
+  client.clock:          {layer: L0, order: 270, title: "Часы ПК расходятся"}
+  os.proxy.dead:         {layer: L1, order: 280, title: "Windows: системный прокси в никуда"}
+  os.route.loop:         {layer: L1, order: 285, title: "Windows: маршрут к серверу в TUN"}
+  os.firewall.block:     {layer: L1, order: 290, title: "Windows: файрвол блокирует клиент"}
+  os.adapter.conflict:   {layer: L1, order: 295, title: "Windows: конфликт VPN-адаптеров"}
+  os.av.filter:          {layer: L1, order: 298, title: "Windows: сторонний сетевой фильтр"}
+  profile.import:        {layer: L5, order: 300, title: "Профиль испорчен при импорте"}
+  profile.uuid:          {layer: L5, order: 305, title: "Профиль: UUID"}
+  profile.pbk:           {layer: L5, order: 310, title: "Профиль: публичный ключ (pbk)"}
+  profile.sid:           {layer: L5, order: 315, title: "Профиль: shortId"}
+  profile.sni:           {layer: L5, order: 320, title: "Профиль: SNI"}
+  profile.path:          {layer: L5, order: 325, title: "Профиль: путь XHTTP"}
+  profile.port:          {layer: L5, order: 330, title: "Профиль: порт"}
+  profile.transport:     {layer: L5, order: 335, title: "Профиль: транспорт"}
+  profile.reality:       {layer: L5, order: 340, title: "Профиль не принят REALITY"}
+  profile.user:          {layer: L5, order: 345, title: "Профиль: UUID или путь"}
+  path.whitelist:        {layer: L3, order: 490, title: "Белый список мобильной сети"}
+  path.ip.unreachable:   {layer: L3, order: 500, title: "Адрес сервера недоступен по пути"}
+  path.hello:            {layer: L3, order: 510, title: "ClientHello режется по пути"}
+  path.freeze.post:      {layer: L3, order: 520, title: "Заморозка после рукопожатия"}
+  path.freeze.mid:       {layer: L3, order: 525, title: "Заморозка на 1–10 КБ"}
+  path.freeze.f16:       {layer: L3, order: 530, title: "Заморозка на 10–32 КБ"}
+  path.freeze.fp:        {layer: L3, order: 540, title: "Заморозка по отпечатку"}
+  lan.mtu:               {layer: L2, order: 560, title: "MTU: большой ClientHello не проходит"}
+  beyond.latency_url:    {layer: L6, order: 800, title: "«Таймаут» — тест задержки клиента"}
+  beyond.dns:            {layer: L6, order: 810, title: "DNS за тоннелем"}
+  ok:                    {layer: "-", order: 900, title: "Тоннель работает"}
+  # Находки: не причина «таймаута», но важно знать.
+  client.socks.exposed:  {layer: L0, order: 950, title: "Локальный прокси открыт в сеть"}
+  client.core.bug6797:   {layer: L0, order: 951, title: "Ядро с открытой ошибкой #6797"}
+  server.version:        {layer: L4, order: 952, title: "Правило X25519MLKEM768 на сервере"}
+  lan.dns.spoof:         {layer: L2, order: 953, title: "Провайдер подменяет DNS"}
+  lan.ipv6.leak:         {layer: L2, order: 954, title: "IPv6 мимо тоннеля"}
+  beyond.ru_direct:      {layer: L6, order: 955, title: "Российские сайты через тоннель закрыты"}
+  # Итоги без причины.
+  unknown.need_window:   {layer: "-", order: 990, title: "Без окна сервера причину не назвать"}
+  unknown.need_other_network: {layer: "-", order: 991, title: "Нужна проверка из другой сети"}
+  unknown:               {layer: "-", order: 999, title: "Причина не определена"}
+
+# Проверки: что предлагать в «Если не помогло» (next_checks).
+checks:
+  C6: "Логи клиента: вставить экспорт логов Hiddify («Логи» → «Скопировать») или включить запись логов в v2rayN"
+  C7: "Захват ClientHello клиента (pktmon, нужен UAC): кнопка «Углублённо» — показывает, что именно шлёт клиент"
+  P5: "Повтор из другой сети: переключиться Wi-Fi ↔ мобильный интернет (раздача с телефона) и нажать «Повторить из другой сети»"
+  S1: "Факты сервера через мост: настроить SSH-алиас и на сервере один раз выполнить `sudo xm bridge on`"
+  S3: "Окно сервера: `sudo xm doctor --live 60 --json` на сервере, в это время один раз «Подключить» в клиенте; файл — «Импорт doctor.json»"
+  W5: "Временно выключить сетевой экран/веб-защиту антивируса и повторить диагностику"
+  B3: "Проверить сайт в браузере через VPN, а не индикатор «задержка» в клиенте"

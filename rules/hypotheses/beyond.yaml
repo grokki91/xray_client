@@ -1,0 +1,46 @@
+# Гипотезы: за тоннелем (L6), итог «работает» и находки сервера.
+
+- code: beyond.latency_url
+  gate: ["P3.outcome=ok"]
+  likely:
+    - ["B3.tunnel_ok=false"]
+  title: "«Таймаут» в клиенте — его тест задержки по URL, а тоннель работает"
+  why: "Через эталонный тоннель запрос 204 прошёл, а URL, которым клиент меряет задержку, через тоннель не открывается. Клиент показывает «таймаут» при живом соединении."
+  actions: ["Проверить сайт в браузере через VPN, а не индикатор", "Hiddify: Настройки → «URL проверки соединения» → https://www.gstatic.com/generate_204"]
+  next_checks: [B3]
+
+- code: beyond.dns
+  gate: ["P3.outcome=ok"]
+  likely:
+    - ["B1.dns_ok=false"]
+  title: "DNS за тоннелем не работает"
+  why: "Тоннель поднят, но имена через него не разрешаются."
+  actions: ["На сервере: `sudo xm harden` (DoH и перехват :53)", "В клиенте DNS — через тоннель"]
+
+- code: ok
+  kind: ok
+  confirmed:
+    - ["P3.outcome=ok", "S3.code=ok"]
+  likely:
+    - ["P3.outcome=ok"]
+  title: "Сервер и профиль работают: эталонное ядро Xray с этим профилем подключилось"
+  why: "Эталонное ядро Xray-core с профилем пользователя прошло REALITY, получило 204 и скачало контрольный объём без заморозки. Путь до сервера, сервер и профиль исправны."
+  actions: ["Если клиент всё равно пишет «таймаут» — причина в клиенте: обновить его или сменить на v2rayN с ядром Xray", "Проверить сайт в браузере через VPN, а не индикатор задержки"]
+
+- code: server.version
+  kind: finding
+  confirmed:
+    - ["S1.mlkem_rule=true"]
+  title: "Сервер на Xray {S1.xray_version}: пускает только ClientHello с X25519MLKEM768"
+  why: "Ядра sing-box (Hiddify 4.x, NekoBox, Karing), mihomo и Xray старше v25.7.26 к такому серверу не подключаются."
+  actions: []
+
+- code: beyond.ru_direct
+  kind: finding
+  likely:
+    - ["S1.ru_block=true", "CX.ru_direct=false"]
+  possible:
+    - ["B2.ran=true", "B2.ru_ok=false"]
+  title: "Российские сайты через тоннель закрыты правилом сервера"
+  why: "На сервере включён `xm harden --ru`: российские адреса из тоннеля — в blackhole (иначе адрес сервера виден российским сервисам). В клиенте нужен маршрут geoip:ru → напрямую."
+  actions: ["Hiddify: Настройки → Регион → Россия", "v2rayN: Маршрутизация → правило «Обход РФ»"]

@@ -1,0 +1,27 @@
+# Эталонные хосты (docs/architecture.md §6.3, приложение C, вопрос 7). Это обычный фон любого
+# компьютера: проверка интернета Windows и 204-эндпоинты CDN. К серверу пользователя отсюда —
+# ничего. Список можно сузить в настройках; адресов установки здесь нет и быть не должно.
+
+# N1/N2: есть ли интернет вообще и не белый ли это список (российский хост доступен, зарубежные — нет).
+internet:
+  - {name: "Microsoft NCSI", url: "http://www.msftconnecttest.com/connecttest.txt", expect_body: "Microsoft Connect Test", region: foreign}
+  - {name: "Google 204",     url: "https://www.gstatic.com/generate_204", expect_status: 204, region: foreign}
+  - {name: "Cloudflare 204", url: "https://cp.cloudflare.com/generate_204", expect_status: 204, region: foreign}
+  - {name: "Яндекс",         url: "https://ya.ru/", expect_status_max: 399, region: ru}
+
+# N3: подмена DNS провайдером — одно заведомо блокируемое в РФ имя: UDP/53 ↔ TCP/53 ↔ DoH.
+dns_probe:
+  name: "rutracker.org"
+  resolvers: ["8.8.8.8", "1.1.1.1"]
+  doh: "https://cloudflare-dns.com/dns-query"
+
+# Через эталонный тоннель (P3): один запрос 204 и чтение ≤ 64 КБ для классов заморозки.
+through_tunnel:
+  probe_204: "https://www.gstatic.com/generate_204"
+  download:  "https://speed.cloudflare.com/__down?bytes=65536"
+  download_bytes: 65536
+  # B2: российский адрес через тоннель — ожидаемо закрыт, если на сервере xm harden --ru.
+  ru_probe: "https://ya.ru/"
+
+# Публичный резолвер для имён при активном TUN клиента (системный DNS тогда уходит в TUN).
+bootstrap_resolvers: ["1.1.1.1:53", "8.8.8.8:53"]
