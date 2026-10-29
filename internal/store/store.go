@@ -8,6 +8,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -109,8 +110,18 @@ func (s *Store) Seal(plain []byte) ([]byte, error) { return protect(plain) }
 // Unseal — обратное Seal.
 func (s *Store) Unseal(blob []byte) ([]byte, error) { return unprotect(blob) }
 
+// marshal — JSON для чтения глазами: без экранирования & < > (в URI и тексте).
+func marshal(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	err := enc.Encode(v)
+	return buf.Bytes(), err
+}
+
 func (s *Store) writeSealed(name string, v any) error {
-	b, err := json.MarshalIndent(v, "", "  ")
+	b, err := marshal(v)
 	if err != nil {
 		return err
 	}

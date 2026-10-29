@@ -35,7 +35,8 @@ func IPOK(s string) bool {
 	if resolvers[s] || a.IsLoopback() || a.IsPrivate() || a.IsUnspecified() || a.IsLinkLocalUnicast() {
 		return true
 	}
-	for _, p := range []string{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "100.64.0.0/10", "255.0.0.0/8"} {
+	// 0.0.0.0/8 зарезервирована (сервером быть не может) — так выглядят версии файлов 0.x.y.z.
+	for _, p := range []string{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "100.64.0.0/10", "255.0.0.0/8", "0.0.0.0/8"} {
 		if netip.MustParsePrefix(p).Contains(a) {
 			return true
 		}

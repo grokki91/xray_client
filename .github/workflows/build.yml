@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal rules)" || { gofmt -l cmd internal rules; exit 1; }
+      - run: go vet ./...
+      # Включает сетевой симулятор: настоящий REALITY-сервер Xray-core на петле.
+      - run: go test ./... -count=1
+
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write # релиз по тегу
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet -tags desktop,production ./...
+      # DPAPI, разбор вывода PowerShell, симулятор — на Windows.
+      - run: go test ./... -count=1
+      - name: Ресурсы exe (иконка, манифест, версия)
+        shell: bash
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3
+          (cd cmd/xdiag-ui && go-winres make --in winres/winres.json --out rsrc --arch amd64)
+          (cd cmd/xdiag && go-winres make --in winres/winres.json --out rsrc --arch amd64)
+      - name: Сборка
+        shell: bash
+        run: |
+          VER="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+          LD="-s -w -X github.com/grokki91/xray_client/internal/engine.Version=$VER"
+          mkdir -p dist
+          go build -trimpath -ldflags "$LD" -o dist/xdiag.exe ./cmd/xdiag
+          go build -trimpath -tags desktop,production -ldflags "$LD -H windowsgui" -o dist/xdiag-ui.exe ./cmd/xdiag-ui
+          (cd dist && sha256sum *.exe > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          ./dist/xdiag.exe version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xdiag-windows-amd64
+          path: dist/
+      - name: Релиз
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

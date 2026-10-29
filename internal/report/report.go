@@ -90,7 +90,14 @@ func Build(s *engine.SessionData) View {
 		}
 	}
 	for _, r := range v.RuledOut {
-		vw.RuledOut = append(vw.RuledOut, r.Short+": "+r.Title)
+		switch {
+		case r.Kind == "ok":
+			vw.RuledOut = append(vw.RuledOut, r.Title)
+		case r.Code == "profile.missing":
+			// «Профиль найден» — не вывод, а условие проверки.
+		default:
+			vw.RuledOut = append(vw.RuledOut, r.Short+" — нет ("+strings.Join(r.Evidence, ", ")+")")
+		}
 	}
 	for _, r := range v.Also {
 		vw.Also = append(vw.Also, fmt.Sprintf("%s (%s)", r.Title, r.Level.Text()))

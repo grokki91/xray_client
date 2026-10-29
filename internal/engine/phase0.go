@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/grokki91/xray_client/internal/clients"
 	"github.com/grokki91/xray_client/internal/evidence"
@@ -31,7 +32,7 @@ func (r *run) phase0(ctx context.Context) {
 		cr.d = a.Detect(ctx, env)
 		if cr.d.Installed {
 			cr.ps, cr.perr = a.Profiles(ctx, env, cr.d)
-			cr.logs = a.Logs(env, cr.d, r.now().Add(-24*60*60*1e9))
+			cr.logs = a.Logs(env, cr.d, r.now().Add(-24*time.Hour))
 			cr.state = a.State(env, cr.d)
 		}
 		r.all = append(r.all, cr)

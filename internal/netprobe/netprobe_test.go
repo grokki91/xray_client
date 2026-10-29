@@ -1,0 +1,80 @@
+package netprobe
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"testing"
+	"time"
+)
+
+func TestBudgetWindows(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	b := NewBudget()
+	b.now = func() time.Time { return now }
+	for i := 0; i < 3; i++ {
+		if err := b.Acquire(TLS); err != nil {
+			t.Fatalf("TLS %d: %v", i, err)
+		}
+	}
+	if err := b.Acquire(TLS); !errors.Is(err, ErrBudget) {
+		t.Fatal("четвёртый TLS за минуту должен быть отклонён")
+	}
+	if b.Acquire(TCP) != nil {
+		t.Fatal("TCP в пределах 6 за 5 минут")
+	}
+	if w := b.WaitTLS(); w != 60*time.Second {
+		t.Fatalf("ожидание %v", w)
+	}
+	now = now.Add(61 * time.Second)
+	if err := b.Acquire(TLS); err != nil {
+		t.Fatalf("через минуту слот свободен: %v", err)
+	}
+	// TCP: уже 5 за 5 минут (4 TLS + 1 TCP) — шестой можно, седьмой нет.
+	if b.Acquire(TCP) != nil || b.Acquire(TCP) == nil {
+		t.Fatalf("лимит TCP: %+v", b.Usage())
+	}
+	s := b.Snapshot()
+	b2 := NewBudget()
+	b2.now = b.now
+	b2.Restore(s)
+	if b2.Can(TCP) {
+		t.Fatal("бюджет переживает перезапуск")
+	}
+}
+
+func TestClassifyAndProbes(t *testing.T) {
+	for err, want := range map[error]string{
+		io.EOF: "eof", context.DeadlineExceeded: "timeout", ErrBudget: "budget",
+		errors.New("dial tcp: connectex: No connection could be made because the target machine actively refused it."): "refused",
+		errors.New("wsarecv: An existing connection was forcibly closed by the remote host."):                          "reset",
+		errors.New("connect: network is unreachable"):                                                                  "unreachable",
+	} {
+		if got := Classify(err); got != want {
+			t.Errorf("%v → %s, ожидалось %s", err, got, want)
+		}
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	addr := ln.Addr().String()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { time.Sleep(3 * time.Second); c.Close() }()
+		}
+	}()
+	d := &Dialer{Timeout: 2 * time.Second}
+	if r := ProbeTCP(context.Background(), d, nil, addr); r.Outcome != "ok" {
+		t.Fatalf("TCP %+v", r)
+	}
+	if r := ProbeTLS(context.Background(), d, nil, addr, "www.example.com", time.Second); r.Outcome != "hello_timeout" {
+		t.Fatalf("молчащий сервер: %+v", r)
+	}
+	ln.Close()
+	if r := ProbeTCP(context.Background(), d, nil, addr); r.Outcome != "refused" {
+		t.Fatalf("закрытый порт: %+v", r)
+	}
+}

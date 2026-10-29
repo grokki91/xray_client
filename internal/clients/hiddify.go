@@ -179,7 +179,8 @@ func (h *Hiddify) entries(env *Env, dir string) ([]hiddifyEntry, error) {
 		return nil, err
 	}
 	defer cleanup()
-	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(tmp)+"?mode=ro")
+	// Копия — своя: открывается простым путём (URI file: ломается на пробелах в профиле Windows).
+	db, err := sql.Open("sqlite", tmp)
 	if err != nil {
 		return nil, err
 	}

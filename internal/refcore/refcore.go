@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -288,6 +289,10 @@ func Run(ctx context.Context, o Options) Result {
 	return res
 }
 
+// reHTTPStatus — отказ сервера на запрос XHTTP («unexpected status 404», «status code: 403»),
+// а не любые три цифры в логе (номер порта «:40404» — не статус).
+var reHTTPStatus = regexp.MustCompile(`(?:unexpected status|status code|statuscode)\W{0,3}[45]\d\d\b`)
+
 // FreezeClass — класс заморозки по байтам, принятым от сервера (границы — ui/health.py).
 func FreezeClass(in int64) string {
 	switch {
@@ -335,7 +340,7 @@ func classify(r Result, dialErr []string, err error, status int) string {
 		return "handshake_timeout"
 	}
 	// Рукопожатие было (от сервера пришли байты), запрос через тоннель не прошёл.
-	if status >= 400 || strings.Contains(logs, "unexpected status") || strings.Contains(logs, "404") ||
+	if status >= 400 || reHTTPStatus.MatchString(logs) ||
 		strings.Contains(logs, "invalid request user id") || strings.Contains(logs, "failed to read response header") {
 		return "closed_after_handshake"
 	}

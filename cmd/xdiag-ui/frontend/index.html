@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xdiag</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">x</div>
+    <div>
+      <h1>Диагностика подключения</h1>
+      <p class="sub">VLESS + REALITY + XHTTP · Hiddify и v2rayN · <span id="ver"></span></p>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="run" role="tab">Диагностика</button>
+    <button class="tab" data-tab="details" role="tab">Подробно</button>
+    <button class="tab" data-tab="history" role="tab">История</button>
+    <button class="tab" data-tab="settings" role="tab">Настройки</button>
+    <button class="tab" data-tab="data" role="tab">Данные</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-run" class="panel active">
+    <div class="runbar card">
+      <button id="go" class="primary">Диагностировать</button>
+      <button id="stop" class="ghost" hidden>Остановить</button>
+      <div class="opts">
+        <label>Клиент
+          <select id="client">
+            <option value="">как в настройках</option>
+            <option value="auto">определить</option>
+            <option value="hiddify">Hiddify</option>
+            <option value="v2rayn">v2rayN</option>
+          </select>
+        </label>
+        <label class="chk"><input type="checkbox" id="optBridge"> Мост к серверу (SSH)</label>
+        <label class="chk"><input type="checkbox" id="optCapture"> Углублённо: захват (UAC)</label>
+        <label class="chk"><input type="checkbox" id="optOther"> Я в другой сети</label>
+      </div>
+      <div class="extras">
+        <button id="imp" class="link">Импорт doctor.json / health.json</button>
+        <button id="logs" class="link">Вставить логи клиента</button>
+        <span id="extrasNote" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card progress">
+        <h2>Ход проверок</h2>
+        <div id="budget" class="budget muted">к серверу: 0 из 3 TLS за минуту</div>
+        <ol id="steps" class="steps"><li class="muted">Нажмите «Диагностировать». Приложение ничего не меняет в системе и клиентах.</li></ol>
+      </div>
+
+      <div class="card verdict" id="verdict" hidden>
+        <div class="vhead">
+          <span id="vLevel" class="badge"></span>
+          <span id="vWhere" class="muted"></span>
+        </div>
+        <p id="vProblem" class="problem"></p>
+        <h2 id="vTitle"></h2>
+        <p id="vWhy"></p>
+        <p id="vAlt" class="alt"></p>
+        <h3>Улики</h3>
+        <ul id="vEvidence" class="ev"></ul>
+        <h3>Что делать</h3>
+        <ol id="vActions" class="actions"></ol>
+        <div id="vNextWrap"><h3>Если не помогло</h3><ul id="vNext"></ul></div>
+        <div id="vAlsoWrap"><h3>Также найдено</h3><ul id="vAlso"></ul></div>
+        <div id="vFindWrap"><h3>Важно знать</h3><ul id="vFind"></ul></div>
+        <div id="vRuledWrap"><h3>Исключено</h3><ul id="vRuled" class="ruled"></ul></div>
+        <div class="vfoot">
+          <button id="copy" class="ghost">Скопировать отчёт (без адресов)</button>
+          <button id="export" class="ghost">Экспорт JSON…</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-details" class="panel">
+    <div class="card">
+      <h2>Все улики сеанса</h2>
+      <p class="muted">Источник: клиент, Windows, сеть, эталон, сервер. Адреса, ключи и UUID заменены метками.</p>
+      <table class="tbl"><thead><tr><th>ID</th><th>Проверка</th><th>Источник</th><th>Результат</th></tr></thead><tbody id="dRows"></tbody></table>
+      <h3>Заметки</h3><ul id="dNotes"></ul>
+      <h3>Строки логов</h3><pre id="dLogs" class="pre"></pre>
+    </div>
+  </section>
+
+  <section id="tab-history" class="panel">
+    <div class="card">
+      <div class="row"><h2>История</h2><span class="grow"></span><button id="hClear" class="ghost danger">Удалить всю историю</button></div>
+      <table class="tbl"><thead><tr><th>Когда</th><th>Вердикт</th><th>Уровень</th><th></th></tr></thead><tbody id="hRows"></tbody></table>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="panel">
+    <div class="card form">
+      <h2>Настройки</h2>
+      <p class="muted">Секреты (профиль, папки) хранятся только на этом ПК, зашифрованными Windows DPAPI для вашей учётной записи.</p>
+      <label>Профиль vless:// (если клиента нет или для сверки)
+        <textarea id="sUri" rows="3" placeholder="не задан"></textarea>
+        <span class="hint" id="sUriHint"></span>
+      </label>
+      <label>SSH-алиас сервера (Host из ~/.ssh/config)
+        <input id="sAlias" placeholder="например xm-ui">
+        <span class="hint">Мост вызывает только <code>sudo -n xm bridge facts|health|doctor</code>. Ключи SSH приложение не читает.</span>
+      </label>
+      <label>Папка v2rayN (если портативный и не найден сам)<input id="sV2" placeholder="C:\v2rayN"></label>
+      <label>Папка данных Hiddify (если не стандартная)<input id="sHid" placeholder="%APPDATA%\Hiddify\hiddify"></label>
+      <div class="cols">
+        <label>Клиент по умолчанию
+          <select id="sClient"><option value="auto">определять</option><option value="hiddify">Hiddify</option><option value="v2rayn">v2rayN</option></select>
+        </label>
+        <label>Хранить историю, дней<input id="sRet" type="number" min="0" max="365"></label>
+        <label>Окно xm doctor, с<input id="sLive" type="number" min="10" max="120"></label>
+      </div>
+      <label class="chk"><input type="checkbox" id="sRef"> Эталонная проба Xray-core (одно настоящее подключение к серверу)</label>
+      <label class="chk"><input type="checkbox" id="sBridge"> Мост к серверу по умолчанию</label>
+      <label class="chk"><input type="checkbox" id="sAddr"> В экспорт включать адрес сервера</label>
+      <div class="row"><button id="sSave" class="primary">Сохранить</button><span id="sMsg" class="muted"></span></div>
+    </div>
+  </section>
+
+  <section id="tab-data" class="panel">
+    <div class="card">
+      <h2>Данные на этом ПК</h2>
+      <p>Всё, что xdiag хранит, лежит в одной папке. Ничего не отправляется наружу; в экспорт отчёта адреса, ключи и URL не попадают.</p>
+      <p><code id="dataDir"></code> <span id="dataProt" class="badge"></span></p>
+      <div class="row">
+        <button id="dOpen" class="ghost">Открыть папку</button>
+        <button id="dShow" class="ghost">Показать сохранённые данные</button>
+      </div>
+      <p class="muted">Без xdiag: в папке есть README.txt с командой PowerShell, которая расшифровывает файлы *.dpapi вашей учётной записью.</p>
+      <h3>Ручной режим моста</h3>
+      <p>На сервере (во время первой команды один раз нажмите «Подключить» в клиенте):</p>
+      <pre id="manual" class="pre"></pre>
+      <p>Затем скопируйте файлы на ПК и нажмите «Импорт doctor.json / health.json».</p>
+    </div>
+  </section>
+</main>
+
+<div id="modal" class="modal" hidden>
+  <div class="dialog" role="dialog" aria-modal="true">
+    <h2 id="mTitle"></h2>
+    <p id="mText" class="mtext"></p>
+    <textarea id="mInput" rows="10" hidden></textarea>
+    <pre id="mPre" class="pre" hidden></pre>
+    <div id="mCount" class="count" hidden></div>
+    <div class="row end">
+      <button id="mNo" class="ghost">Отмена</button>
+      <button id="mYes" class="primary">Да</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

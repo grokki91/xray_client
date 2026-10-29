@@ -73,6 +73,15 @@ func TestReferenceProbe(t *testing.T) {
 		}
 	})
 
+	t.Run("чужой путь XHTTP — закрыто после рукопожатия", func(t *testing.T) {
+		p := prof(t, s)
+		p.Path = "/other-path"
+		r := Run(ctx, opts(s, p, "chrome", netprobe.NewBudget()))
+		if r.Outcome != "closed_after_handshake" {
+			t.Fatalf("%+v\n%s", r, strings.Join(r.Logs, "\n"))
+		}
+	})
+
 	t.Run("заморозка на 4 КБ", func(t *testing.T) {
 		o := opts(s, prof(t, s), "chrome", netprobe.NewBudget())
 		o.Download = s.URL("/stall")
