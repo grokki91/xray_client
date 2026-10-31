@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # xdiag — почему VPN-клиент пишет «таймаут»
 
 Приложение для Windows 11: одна кнопка «Диагностировать» — и одна причина с уровнем
@@ -125,8 +124,3 @@ GOOS=windows go build -tags desktop,production -ldflags "-H windowsgui" ./cmd/xd
 `internal/clients` — Hiddify и v2rayN; `internal/refcore` — эталонное ядро;
 `internal/bridge` — `xm`; `internal/store` — DPAPI; `cmd/` — CLI и окно. Правила для
 изменений — [AGENTS.md](AGENTS.md).
-=======
-# xray_client
-
-Тестовый коммит для проверки доступа на push.
->>>>>>> origin/main
