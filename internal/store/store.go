@@ -33,7 +33,8 @@ type Settings struct {
 	Client               string `json:"client"`       // auto | hiddify | v2rayn
 	LiveSeconds          int    `json:"live_seconds"` // окно xm doctor
 	UseBridge            bool   `json:"use_bridge"`
-	Reference            bool   `json:"reference"` // эталонная проба
+	Reference            bool   `json:"reference"`       // эталонная проба
+	Theme                string `json:"theme,omitempty"` // окно: "" — как в Windows | dark | light
 }
 
 // DefaultSettings — умолчания (§13: 30 дней, экспорт без адреса).
@@ -168,6 +169,9 @@ func (s *Store) LoadSettings() Settings {
 	}
 	if st.Client == "" {
 		st.Client = "auto"
+	}
+	if st.Theme != "dark" && st.Theme != "light" {
+		st.Theme = ""
 	}
 	return st
 }

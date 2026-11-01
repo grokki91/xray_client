@@ -133,6 +133,22 @@ func (a *App) SaveSettings(f SettingsForm) error {
 	if s.LiveSeconds < 10 || s.LiveSeconds > 120 {
 		s.LiveSeconds = 60
 	}
+	s.Theme = a.st.LoadSettings().Theme // тема — переключателем (SetTheme), форма её не меняет
+	return a.st.SaveSettings(s)
+}
+
+// SetTheme — тема окна (переключатель на боковой панели): dark | light | "" — как в Windows.
+func (a *App) SetTheme(t string) error {
+	if a.err != nil {
+		return a.err
+	}
+	switch t {
+	case "", "dark", "light":
+	default:
+		return errors.New("тема: dark, light или пусто")
+	}
+	s := a.st.LoadSettings()
+	s.Theme = t
 	return a.st.SaveSettings(s)
 }
 

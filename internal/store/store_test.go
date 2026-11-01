@@ -58,6 +58,32 @@ func TestVaultSessionsRetention(t *testing.T) {
 	}
 }
 
+// Тема окна переживает перезапуск; чужое значение в settings.json — «как в Windows».
+func TestSettingsTheme(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LoadSettings().Theme; got != "" {
+		t.Fatalf("тема по умолчанию = %q, нужно пусто", got)
+	}
+	st := s.LoadSettings()
+	st.Theme = "dark"
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LoadSettings().Theme; got != "dark" {
+		t.Fatalf("тема = %q, нужно dark", got)
+	}
+	st.Theme = "neon"
+	if err := s.SaveSettings(st); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LoadSettings().Theme; got != "" {
+		t.Fatalf("неизвестная тема = %q, нужно пусто", got)
+	}
+}
+
 func TestBudgetFilePerServer(t *testing.T) {
 	now := time.Unix(3_000_000, 0)
 	old := BudgetFile{Server: "aaa", TLS: []time.Time{now.Add(-30 * time.Second)}, TCP: []time.Time{now.Add(-30 * time.Second)}}
