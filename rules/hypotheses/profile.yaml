@@ -68,7 +68,7 @@
     - ["S1.match_port=false"]
   likely:
     - ["C3.issues~port.invalid"]
-  excluded: ["S1.match_port=true", "P2.outcome=mask_cert"]
+  excluded: ["S1.match_port=true", "P2.outcome=mask_cert", "P3.outcome=ok", "C10.outcome=ok"]
   title: "Профиль: порт не совпадает с публичным портом сервера"
   why: "Порт в профиле не тот, на котором сервер принимает REALITY."
   actions: ["Импортировать профиль заново: `sudo xm uri <имя>`"]
@@ -89,7 +89,7 @@
     - ["S3.code=profile.changed"]
   possible:
     - ["P3.outcome=real_cert"]
-  excluded: ["P3.outcome=ok", "S1.match_pbk=true"]
+  excluded: ["P3.outcome=ok", "S1.match_pbk=true", "C10.outcome=ok"]
   title: "Профиль не принят REALITY: ключ, shortId или SNI не совпадают с сервером"
   why: "Сервер жив и отдаёт сайт-маску (обычный TLS-зонд получил её сертификат), но эталонное ядро Xray с профилем пользователя (fp=chrome, X25519MLKEM768 есть) тоже получило сертификат маски вместо тоннеля. Значит, сервер не узнал профиль."
   alternative: "То же даст профиль со старым ключом после переустановки сервера и, реже, часы ПК при maxTimeDiff на сервере. Что именно не совпало — покажет сверка хэшей через мост."
@@ -100,7 +100,7 @@
   likely:
     - ["P3.outcome=closed_after_handshake"]
     - ["S3.code=profile.user"]
-  excluded: ["P3.outcome=ok"]
+  excluded: ["P3.outcome=ok", "C10.outcome=ok"]
   title: "Профиль: REALITY принят, но сервер сразу закрыл соединение — UUID или путь"
   why: "Рукопожатие с сервером прошло, но первый запрос через тоннель оборвался: так выглядит UUID, которого нет на сервере, или неверный путь XHTTP."
   actions: ["`sudo xm clients` — есть ли клиент", "Импортировать профиль заново: `sudo xm uri <имя>`"]

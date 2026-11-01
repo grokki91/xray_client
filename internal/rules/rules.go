@@ -300,7 +300,8 @@ func (e *Engine) Decide(set *evidence.Set) Verdict {
 		r := res[i]
 		switch {
 		case r.Kind == "ok":
-			if r.Level.Rank() >= Likely.Rank() {
+			// Самый сильный из итогов «работает»; при равенстве — первый по порядку.
+			if r.Level.Rank() >= Likely.Rank() && (okRes == nil || r.Level.Rank() > okRes.Level.Rank()) {
 				okRes = &res[i]
 			}
 		case r.Kind == "finding":
@@ -368,6 +369,9 @@ func (e *Engine) unknown(set *evidence.Set, possible []Result) Result {
 		}
 	}
 	switch {
+	case set.Get("P1").Str("outcome") == "budget" || set.Get("P3").Str("outcome") == "budget":
+		// Пробы к серверу не выполнены — без них «нужно окно сервера» было бы неправдой.
+		code = "unknown.budget"
 	case need["S3"] && !set.Has("S3"):
 		code = "unknown.need_window"
 	case need["P5"] && !set.Has("P5"):
@@ -379,6 +383,9 @@ func (e *Engine) unknown(set *evidence.Set, possible []Result) Result {
 	r := Result{Code: code, Kind: "cause", Layer: info.Layer, LayerTitle: e.Tax.Layers[info.Layer], Level: None,
 		Short: info.Title, Title: info.Title, Order: info.Order}
 	switch code {
+	case "unknown.budget":
+		r.Why = "Пробы к серверу не выполнены: к нему только что было несколько проверок, а приложение открывает не больше 3 TLS-соединений в минуту и 6 TCP за 5 минут — частые попытки сами похожи на шторм. Без проб к серверу причину не назвать."
+		r.Actions = []string{"Повторить диагностику через 1–5 минут; приложение само подождёт, если до свободного слота меньше минуты"}
 	case "unknown.need_window":
 		r.Why = "Со стороны ПК причина не видна: нужно посмотреть, что приходит на сервер в момент попытки клиента."
 		r.NextChecks = []Check{{"S3", e.Tax.Checks["S3"]}}

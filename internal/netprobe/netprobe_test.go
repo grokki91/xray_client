@@ -44,6 +44,42 @@ func TestBudgetWindows(t *testing.T) {
 	}
 }
 
+// Окно живёт долго и каждый сеанс восстанавливает снимок из файла: тот же снимок не должен
+// удваивать счётчик (было: второй сеанс подряд — «бюджет исчерпан» без единой пробы).
+func TestBudgetRestoreIdempotentAndWait(t *testing.T) {
+	now := time.Unix(2_000_000, 0)
+	b := NewBudget()
+	b.now = func() time.Time { return now }
+	for i := 0; i < 2; i++ {
+		_ = b.Acquire(TLS)
+		_ = b.Acquire(TCP)
+	}
+	start := b.Usage()
+	s := b.Snapshot()
+	b.Restore(s)
+	b.Restore(s)
+	if u := b.Usage(); u.TCP != 4 || u.TLS != 2 {
+		t.Fatalf("после двух Restore: %+v", u)
+	}
+	if w := b.Wait(TLS); w != 0 {
+		t.Fatalf("слот TLS свободен, ожидание %v", w)
+	}
+	_ = b.Acquire(TLS)
+	if w := b.Wait(TLS); w != 60*time.Second {
+		t.Fatalf("TLS: %v", w)
+	}
+	if w := b.Wait(TCP); w != 0 {
+		t.Fatalf("TCP свободен: %v", w)
+	}
+	_ = b.Acquire(TCP)
+	if w := b.Wait(TCP); w != 5*time.Minute {
+		t.Fatalf("TCP: %v", w)
+	}
+	if u := b.Usage().Since(start); u.TotalTLS != 1 || u.TotalTCP != 2 {
+		t.Fatalf("за сеанс: %+v", u)
+	}
+}
+
 func TestClassifyAndProbes(t *testing.T) {
 	for err, want := range map[error]string{
 		io.EOF: "eof", context.DeadlineExceeded: "timeout", ErrBudget: "budget",

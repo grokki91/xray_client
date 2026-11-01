@@ -63,6 +63,17 @@ function modal({ title, text, yes = "Да", no = "Отмена", input = false, 
 
 // ─── События ядра ───────────────────────────────────────────────────────────
 const stepNodes = new Map();
+// Доля пути по шагу: порядок фаз ядра (0 → Windows и клиенты, 1 → сеть, 2 → сервер, 3–4 → мост, захват).
+const STEP_AT = { W: 4, C: 10, N1: 20, C10: 30, P: 40, P1: 40, P3: 52, P3m: 70, P2: 80, P4: 84, S1: 88, S2: 90, S3: 93, C7: 96, save: 98 };
+let progressPct = 0;
+let waitTimer = null;
+
+function setProgress(pct) {
+  progressPct = Math.max(progressPct, Math.min(100, pct));
+  $("barFill").style.width = progressPct + "%";
+  $("barFill").parentElement.setAttribute("aria-valuenow", String(Math.round(progressPct)));
+}
+
 function onProgress(s) {
   const steps = $("steps");
   if (steps.firstChild && steps.firstChild.classList && steps.firstChild.classList.contains("muted")) clear(steps);
@@ -77,6 +88,26 @@ function onProgress(s) {
   li.children[0].className = "m st-" + s.status;
   li.children[1].textContent = s.title;
   li.children[2].textContent = s.note || "";
+  if (!running) return;
+  const at = STEP_AT[s.id] !== undefined ? STEP_AT[s.id] : progressPct;
+  setProgress(s.status === "run" ? at : at + 6);
+  if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+  if (s.status === "run") {
+    $("scanStep").textContent = s.title + (s.note ? " — " + s.note : "…");
+    if (s.wait) {
+      // Пауза (лимит проб к серверу, повтор через 30 с): видно, что не зависло.
+      let left = s.wait;
+      const why = (s.note || "").split(": ").slice(1).join(": ");
+      const tick = () => {
+        const mm = left >= 60 ? Math.floor(left / 60) + " мин " + String(left % 60).padStart(2, "0") + " с" : left + " с";
+        $("scanStep").textContent = s.title + " — ожидание " + mm + (why ? ": " + why : "");
+        left -= 1;
+        if (left < 0) { clearInterval(waitTimer); waitTimer = null; }
+      };
+      tick();
+      waitTimer = setInterval(tick, 1000);
+    }
+  }
 }
 
 window.addEventListener("load", () => {
@@ -113,14 +144,37 @@ async function init() {
 $("go").addEventListener("click", run);
 $("stop").addEventListener("click", () => api().Cancel());
 
+let clockTimer = null;
+function scanning(on) {
+  running = on;
+  $("go").disabled = on;
+  $("go").classList.toggle("busy", on);
+  $("goText").textContent = on ? "Идёт диагностика…" : "Диагностировать";
+  $("stop").hidden = !on;
+  $("scan").hidden = !on;
+  if (clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+  if (waitTimer) { clearInterval(waitTimer); waitTimer = null; }
+  if (on) {
+    progressPct = 0;
+    setProgress(2);
+    $("scanStep").textContent = "Подготовка…";
+    const t0 = Date.now();
+    const tick = () => {
+      const s = Math.floor((Date.now() - t0) / 1000);
+      $("scanTime").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    };
+    tick();
+    clockTimer = setInterval(tick, 1000);
+  }
+}
+
 async function run() {
   if (running) return;
-  running = true;
-  $("go").disabled = true;
-  $("stop").hidden = false;
+  scanning(true);
   clear($("steps"));
   stepNodes.clear();
   $("verdict").hidden = true;
+  $("summary").hidden = true;
   try {
     const v = await api().Run({ client: $("client").value, bridge: $("optBridge").checked, capture: $("optCapture").checked,
       other_network: $("optOther").checked, offline: false });
@@ -131,9 +185,7 @@ async function run() {
   } catch (e) {
     await modal({ title: "Диагностика не выполнена", text: String(e), no: null, yes: "Закрыть" });
   } finally {
-    running = false;
-    $("go").disabled = false;
-    $("stop").hidden = true;
+    scanning(false);
   }
 }
 
@@ -150,31 +202,79 @@ function list(node, items, mk) {
   return (items || []).length;
 }
 
-function levelClass(v) {
-  if (v.code === "ok") return "lv-ok";
-  return "lv-" + (v.level_code || "");
+const ICON = { ok: "✓", problem: "✕", unknown: "?", incomplete: "!" };
+const CONF = { confirmed: "●●● подтверждено", likely: "●●○ вероятно", possible: "●○○ возможно" };
+const STAGE_ICON = { ok: "✓", fail: "✕", warn: "!", idle: "○", skip: "–" };
+
+function renderSummary(v) {
+  const st = v.status && v.status.kind ? v.status : { kind: "unknown", head: v.title };
+  const box = $("summary");
+  box.hidden = false;
+  box.className = "card summary sum-" + st.kind;
+  $("sIcon").textContent = ICON[st.kind] || "?";
+  $("sHead").textContent = st.head;
+  $("sTitle").textContent = v.title;
+  // Уверенность — отдельно от цвета: красный — «не работает», а не «точно».
+  let conf = "";
+  if (st.kind === "ok") conf = v.code === "ok.client" ? "проверено через сам клиент" : "проверено эталонным ядром Xray";
+  else if (CONF[v.level_code]) conf = "уверенность: " + CONF[v.level_code];
+  $("sConf").textContent = conf;
+  $("sConf").hidden = !conf;
+  $("sWhere").textContent = st.kind === "problem" && v.where && v.where !== "—" ? "где: " + v.where.replace(/^L\d+ — /, "").toLowerCase() : "";
+  $("sWhere").hidden = !$("sWhere").textContent;
+  $("sWhen").textContent = v.when || "";
+
+  const tg = $("sTarget");
+  clear(tg);
+  const t = v.target;
+  if (t) {
+    tg.append(el("span", "tlabel", "Проверено:"));
+    const add = (label, value, strong) => {
+      if (!value) return;
+      const sp = el("span", "titem");
+      if (label) sp.append(el("span", "muted", label + " "));
+      sp.append(el(strong ? "b" : "span", null, value));
+      tg.append(sp);
+    };
+    add("профиль", t.profile ? "«" + t.profile + "»" : "", true);
+    add("сервер", t.server, true);
+    add("", t.transport);
+    add("", t.source);
+    if (t.client) add("", t.client + (t.state ? ": " + t.state : ""), !!t.state);
+  }
+  tg.hidden = !t;
+
+  const ch = $("chain");
+  clear(ch);
+  (v.stages || []).forEach((x) => {
+    const li = el("li", "node n-" + x.state);
+    li.append(el("span", "dot", STAGE_ICON[x.state] || "–"));
+    const tx = el("span", "ntext");
+    tx.append(el("b", null, x.title), el("span", "nnote", x.note));
+    li.append(tx);
+    ch.append(li);
+  });
+  ch.hidden = !(v.stages || []).length;
 }
 
 function renderVerdict(v) {
+  renderSummary(v);
   $("verdict").hidden = false;
-  const b = $("vLevel");
-  b.textContent = v.level;
-  b.className = "badge " + levelClass(v);
-  $("vWhere").textContent = v.where;
-  $("vProblem").textContent = v.problem;
-  $("vTitle").textContent = v.title;
   $("vWhy").replaceWith(Object.assign(rich("p", v.why), { id: "vWhy" }));
   $("vAlt").textContent = v.alternative ? "Альтернатива: " + v.alternative : "";
-  list($("vEvidence"), v.evidence, (e) => {
+  $("vEvWrap").hidden = !list($("vEvidence"), v.evidence, (e) => {
     const li = el("li");
     li.append(el("span", "id", e.id), document.createTextNode(e.text));
     return li;
   });
-  list($("vActions"), v.actions, (a) => rich("li", a));
+  $("vActWrap").hidden = !list($("vActions"), v.actions, (a) => rich("li", a));
   $("vNextWrap").hidden = !list($("vNext"), v.next, (a) => rich("li", a));
   $("vAlsoWrap").hidden = !list($("vAlso"), v.also);
   $("vFindWrap").hidden = !list($("vFind"), v.findings);
-  $("vRuledWrap").hidden = !list($("vRuled"), v.ruled_out);
+  const nRuled = list($("vRuled"), v.ruled_out);
+  $("vRuledWrap").hidden = !nRuled;
+  $("vRuledWrap").open = false;
+  $("vRuledSum").textContent = "Исключено проверками: " + nRuled;
   if (v.budget) $("budget").textContent = v.budget;
 }
 

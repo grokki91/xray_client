@@ -9,7 +9,7 @@
     - ["N2.ru_ok=true", "N2.foreign_ok=false", "P1.outcome=timeout"]
   possible:
     - ["N2.ru_ok=true", "N2.foreign_ok=false"]
-  excluded: ["N2.foreign_ok=true", "P1.outcome=ok"]
+  excluded: ["N2.foreign_ok=true", "P1.outcome=ok", "C10.outcome=ok"]
   title: "Белый список: российские сайты открываются, зарубежные и сервер — нет"
   why: "Так выглядит режим белого списка мобильной сети (IP + SNI): пускают только разрешённые адреса."
   alternative: "То же даст фильтр на роутере или корпоративный прокси. Подтвердить — повтором из другой сети (домашний Wi-Fi)."
@@ -24,13 +24,12 @@
     - ["S3.code=net.synack", "S3.ssh=true"]
   likely:
     - ["P1.outcome=timeout", "P4.tcp=timeout"]
-    - ["P1.outcome=timeout", "P2.outcome=tcp_timeout"]
     - ["P1.outcome=timeout", "S0.ssh=unreachable"]
   possible:
     - ["P1.outcome=timeout|unreachable"]
-  excluded: ["P1.outcome=ok", "S3.own=true", "N2.foreign_ok=false"]
+  excluded: ["P1.outcome=ok", "S3.own=true", "N2.foreign_ok=false", "C10.outcome=ok"]
   title: "Адрес сервера недоступен: TCP до порта сервера не устанавливается"
-  why: "Интернет есть (эталонные сайты открываются), а соединение с сервером не устанавливается ни с первой попытки, ни с повтора."
+  why: "Интернет есть (эталонные сайты открываются), а TCP-соединение с портом сервера не устанавливается ни с первой попытки, ни с повтора через 30 секунд."
   alternative: "Это похоже на блокировку адреса по пути, но то же даёт бан IP хостера, белый список мобильной сети или файрвол роутера. Различить — повтором из другой сети."
   actions:
     - "Проверить из другой сети (Wi-Fi ↔ мобильный интернет): там работает — режет сеть, не сервер"
@@ -48,7 +47,7 @@
     - ["P1.outcome=ok", "P2.outcome=hello_timeout|reset_after_hello|eof_after_hello", "N4.ok=true", "P4.tls=hello_timeout|reset_after_hello|eof_after_hello|tcp_timeout"]
   possible:
     - ["P1.outcome=ok", "P2.outcome=hello_timeout|reset_after_hello|eof_after_hello"]
-  excluded: ["P2.outcome=mask_cert", "S3.stage=hello", "P3.outcome=ok"]
+  excluded: ["P2.outcome=mask_cert", "S3.stage=hello", "P3.outcome=ok", "C10.outcome=ok"]
   title: "TCP до сервера есть, а ClientHello с SNI маски не проходит"
   why: "Соединение с портом сервера устанавливается, но после ClientHello ответа нет или приходит обрыв — а тот же сайт-маска по своему настоящему адресу открывается. Так режут первый пакет с SNI на адрес сервера."
   alternative: "То же даёт сервер, у которого nginx принимает соединение, а Xray за ним не отвечает (самопроверка сервера), и большой ClientHello при малом MTU."
@@ -64,7 +63,7 @@
   likely:
     - ["P3.outcome=freeze", "P3.freeze=post"]
     - ["P3.outcome=handshake_timeout", "P2.outcome=mask_cert"]
-  excluded: ["P3.outcome=ok", "S3.after=flow"]
+  excluded: ["P3.outcome=ok", "S3.after=flow", "C10.outcome=ok"]
   title: "Заморозка: сразу после рукопожатия ответ сервера до ПК не доходит"
   why: "Рукопожатие эталонного ядра началось, но данные от сервера встали в самом начале (до 1 КБ). Так выглядит заморозка ТСПУ по отпечатку или SNI."
   alternative: "То же даёт перегруженный сервер или сеть с большими потерями; подтвердить — окном сервера или из другой сети."
@@ -78,7 +77,7 @@
     - ["P3.freeze=mid", "P5.p3=ok"]
   likely:
     - ["P3.outcome=freeze", "P3.freeze=mid"]
-  excluded: ["P3.outcome=ok", "S3.after=flow"]
+  excluded: ["P3.outcome=ok", "S3.after=flow", "C10.outcome=ok"]
   title: "Заморозка: данные от сервера встают на 1–10 КБ"
   why: "Тоннель эталонного ядра поднялся, но загрузка встала на первых килобайтах."
   alternative: "Перегрузка сервера или потери в сети дают похожую картину; подтвердить — окном сервера или из другой сети."
@@ -93,7 +92,7 @@
     - ["S3.code=net.f16", "S3.ssh=true"]
   likely:
     - ["P3.outcome=freeze", "P3.freeze=f16"]
-  excluded: ["P3.outcome=ok", "S3.after=flow"]
+  excluded: ["P3.outcome=ok", "S3.after=flow", "C10.outcome=ok"]
   title: "Заморозка TCP на 10–32 КБ к адресу хостинга"
   why: "Данные через тоннель встали на 10–32 КБ: это известная с 2025 года заморозка соединений к адресам хостинговых ASN, протокол не важен."
   alternative: "Встречается и при проблемах на стороне хостера; подтвердить — окном сервера или из другой сети."

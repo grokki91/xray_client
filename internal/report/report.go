@@ -20,6 +20,9 @@ import (
 type View struct {
 	ID        string              `json:"id"`
 	When      string              `json:"when"`
+	Status    Status              `json:"status"`
+	Stages    []Stage             `json:"stages"`
+	Target    *Target             `json:"target,omitempty"` // только окно (см. Target)
 	Problem   string              `json:"problem"`
 	Where     string              `json:"where"`
 	Level     string              `json:"level"`
@@ -62,10 +65,15 @@ func Build(s *engine.SessionData) View {
 	v := s.Verdict
 	m := v.Main
 	vw := View{ID: s.ID, When: s.Started.Local().Format("02.01.2006 15:04"), Code: m.Code, Title: m.Title, Why: m.Why, Alt: m.Alternative,
-		Actions: m.Actions, Level: m.Level.Text(), LevelCode: string(m.Level), Where: whereText(m), Problem: problem(s),
-		Notes: s.Notes, Logs: s.Logs, Clients: s.Clients, Steps: s.Steps}
+		Actions: m.Actions, Level: m.Level.Text(), LevelCode: string(m.Level), Where: whereText(m), Problem: problemText(s, m),
+		Notes: s.Notes, Logs: s.Logs, Clients: s.Clients, Steps: s.Steps,
+		Status: status(s, m), Stages: stages(s, m), Target: target(s)}
 	if m.Level == rules.None {
 		vw.Level = "не определено"
+	}
+	if m.Level == rules.Confirmed {
+		// Альтернатива уже снята проверкой — показывать её значит сбивать с толку.
+		vw.Alt = ""
 	}
 	byID := map[string]evidence.Evidence{}
 	for _, e := range s.Evidence {
@@ -89,7 +97,13 @@ func Build(s *engine.SessionData) View {
 			vw.Next = append(vw.Next, c.Text)
 		}
 	}
+	if m.Code == "unknown.budget" || m.Kind == "ok" {
+		vw.Next = nil // повторить проверку — и есть следующий шаг; «если не помогло» здесь не о чем
+	}
 	for _, r := range v.RuledOut {
+		if m.Kind == "ok" {
+			break // всё работает — список исключённых причин только мешает
+		}
 		switch {
 		case r.Kind == "ok":
 			vw.RuledOut = append(vw.RuledOut, r.Title)
@@ -114,9 +128,13 @@ func Build(s *engine.SessionData) View {
 		vw.Details = append(vw.Details, line(e))
 	}
 	b := s.Budget
-	vw.Budget = fmt.Sprintf("к серверу за сеанс: TLS %d, TCP %d (лимит %d TLS в минуту)", b.TotalTLS, b.TotalTCP, b.TLSMax)
+	if b.TotalTCP == 0 && b.TotalTLS == 0 {
+		vw.Budget = "к серверу за проверку: соединений не было"
+	} else {
+		vw.Budget = fmt.Sprintf("к серверу за проверку: %d TLS, %d TCP (лимит — %d TLS в минуту)", b.TotalTLS, b.TotalTCP, b.TLSMax)
+	}
 	if b.Refused > 0 {
-		vw.Budget += fmt.Sprintf("; отложено проб: %d", b.Refused)
+		vw.Budget += fmt.Sprintf("; пропущено по лимиту: %d", b.Refused)
 	}
 	return vw
 }
@@ -144,40 +162,25 @@ func whereText(m rules.Result) string {
 	return m.Layer + " — " + m.LayerTitle
 }
 
-// problem — «что не работает» одной фразой.
-func problem(s *engine.SessionData) string {
-	name := s.ClientName
-	if name == "" {
-		for _, c := range s.Clients {
-			if c.Client == s.Client {
-				name = map[string]string{"hiddify": "Hiddify", "v2rayn": "v2rayN"}[c.Client]
-				if c.Version != "" {
-					name += " " + c.Version
-				}
-			}
-		}
-	}
-	if name == "" {
-		name = "VPN-клиент"
-	}
-	switch s.Verdict.Main.Code {
-	case "ok":
-		return name + ": сервер и профиль в порядке — проверяется, почему клиент пишет «таймаут»"
-	case "lan.noinet":
-		return "Нет интернета на этом ПК"
-	case "profile.missing":
-		return "Не найден профиль подключения"
-	}
-	return name + " не подключается к серверу («таймаут» или «Подключение…»)"
-}
-
 // Text — отчёт для терминала и буфера обмена.
 func Text(v View) string {
 	var b strings.Builder
 	w := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
-	w("Что не работает: %s", v.Problem)
-	w("Где: %s", v.Where)
-	w("Причина (%s): %s", v.Level, v.Title)
+	w("Итог: %s", v.Status.Head)
+	w("Проверено: %s", v.Problem)
+	var chain []string
+	for _, st := range v.Stages {
+		chain = append(chain, fmt.Sprintf("%s %s — %s", stageMark[st.State], st.Title, st.Note))
+	}
+	if len(chain) > 0 {
+		w("Цепочка: %s", strings.Join(chain, " → "))
+	}
+	if v.Status.Kind == "ok" {
+		w("%s", v.Title)
+	} else {
+		w("Где: %s", v.Where)
+		w("Причина (%s): %s", v.Level, v.Title)
+	}
 	if v.Why != "" {
 		w("  %s", v.Why)
 	}
@@ -230,6 +233,8 @@ func Text(v View) string {
 	return b.String()
 }
 
+var stageMark = map[string]string{"ok": "✓", "fail": "✗", "warn": "!", "idle": "○", "skip": "–"}
+
 // Details — все улики построчно.
 func Details(v View) string {
 	var b strings.Builder
@@ -259,6 +264,7 @@ func Export(s *engine.SessionData, includeAddress bool) ([]byte, error) {
 	if sec != nil {
 		r.Add(redact.Server, sec.Server)
 		r.Add(redact.SNI, sec.SNI)
+		r.Add(redact.Other, sec.Name)
 	}
 	out := r.String(string(b))
 	if leaks := redact.Leaks(out); len(leaks) > 0 {
@@ -281,6 +287,7 @@ func ExportText(s *engine.SessionData) string {
 	if s.Secret != nil {
 		r.Add(redact.Server, s.Secret.Server)
 		r.Add(redact.SNI, s.Secret.SNI)
+		r.Add(redact.Other, s.Secret.Name)
 	}
 	return r.String(Text(v) + "\nПодробно:\n" + Details(v))
 }

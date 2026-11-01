@@ -28,6 +28,7 @@ codes:
   client.core.mlkem:     {layer: L0, order: 250, title: "Клиент: ядро без X25519MLKEM768"}
   client.core.old:       {layer: L0, order: 255, title: "Клиент: версия ядра не принимается сервером"}
   profile.fp:            {layer: L5, order: 260, title: "Профиль: отпечаток fp"}
+  client.tunnel:         {layer: L0, order: 265, title: "Клиент: трафик через него не идёт"}
   client.clock:          {layer: L0, order: 270, title: "Часы ПК расходятся"}
   os.proxy.dead:         {layer: L1, order: 280, title: "Windows: системный прокси в никуда"}
   os.route.loop:         {layer: L1, order: 285, title: "Windows: маршрут к серверу в TUN"}
@@ -54,7 +55,9 @@ codes:
   lan.mtu:               {layer: L2, order: 560, title: "MTU: большой ClientHello не проходит"}
   beyond.latency_url:    {layer: L6, order: 800, title: "«Таймаут» — тест задержки клиента"}
   beyond.dns:            {layer: L6, order: 810, title: "DNS за тоннелем"}
-  ok:                    {layer: "-", order: 900, title: "Тоннель работает"}
+  ok.client:             {layer: "-", order: 897, title: "Всё работает: клиент подключён"}
+  ok.idle:               {layer: "-", order: 898, title: "Сервер в порядке, клиент не подключён"}
+  ok:                    {layer: "-", order: 900, title: "Сервер и профиль в порядке"}
   # Находки: не причина «таймаута», но важно знать.
   client.socks.exposed:  {layer: L0, order: 950, title: "Локальный прокси открыт в сеть"}
   client.core.bug6797:   {layer: L0, order: 951, title: "Ядро с открытой ошибкой #6797"}
@@ -63,6 +66,7 @@ codes:
   lan.ipv6.leak:         {layer: L2, order: 954, title: "IPv6 мимо тоннеля"}
   beyond.ru_direct:      {layer: L6, order: 955, title: "Российские сайты через тоннель закрыты"}
   # Итоги без причины.
+  unknown.budget:        {layer: "-", order: 989, title: "Сервер не проверен: лимит проб"}
   unknown.need_window:   {layer: "-", order: 990, title: "Без окна сервера причину не назвать"}
   unknown.need_other_network: {layer: "-", order: 991, title: "Нужна проверка из другой сети"}
   unknown:               {layer: "-", order: 999, title: "Причина не определена"}

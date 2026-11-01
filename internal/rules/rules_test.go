@@ -92,6 +92,24 @@ func TestScenarios(t *testing.T) {
 		{"сервер не слушает (самопроверка)", with(hiddify(), ev("S1", "ok", true, "self_r", "fail", "self_at", "listen")), "server.listen", Confirmed},
 		{"RST на порт", with(v2rayn("chrome", true), ev("P1", "outcome", "refused")), "server.listen", Likely},
 		{"UFW закрыт", with(v2rayn("chrome", true), ev("S1", "ok", true, "ufw", "closed")), "server.firewall", Confirmed},
+		// Состояние клиента (C10 — запрос через его локальный прокси). Скриншоты 2026-11-01.
+		{"скрин 1: Hiddify подключён, трафик идёт", with(hiddify(), ev("C10", "listening", true, "outcome", "ok"), ev("P1", "outcome", "ok"),
+			ev("P3", "outcome", "ok"), ev("P3m", "outcome", "ok")), "ok.client", Confirmed},
+		{"скрин 2: Hiddify не подключён, пробы к серверу съел лимит", with(hiddify(), ev("C10", "listening", false, "outcome", "not_listening"),
+			ev("P1", "outcome", "budget")), "unknown.budget", None},
+		{"Hiddify не подключён, сервер и профиль в порядке", with(hiddify(), ev("C10", "listening", false, "outcome", "not_listening"),
+			ev("P1", "outcome", "ok"), ev("P3", "outcome", "ok"), ev("P3m", "outcome", "ok")), "ok.idle", Likely},
+		{"скрин 3: Hiddify «Подключение…», сервер требует X25519MLKEM768", with(hiddify(), ev("C10", "listening", true, "outcome", "fail", "error", "timeout"),
+			ev("P1", "outcome", "ok"), ev("P3", "outcome", "ok"), ev("P3m", "outcome", "real_cert")), "client.core.mlkem", Confirmed},
+		{"скрин 4: TCP до сервера нет ни сразу, ни через 30 с", with(hiddify(), ev("C10", "listening", true, "outcome", "fail", "error", "timeout"),
+			ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout", "tls", "tcp_timeout")), "path.ip.unreachable", Likely},
+		{"клиент запущен, трафик не идёт, эталон прошёл", with(v2rayn("chrome", true), ev("C10", "listening", true, "outcome", "fail"),
+			ev("P1", "outcome", "ok"), ev("P3", "outcome", "ok")), "client.tunnel", Confirmed},
+		{"клиент не работает, эталон получил маску — виноват профиль, не клиент", with(v2rayn("chrome", true), ev("C10", "listening", true, "outcome", "fail"),
+			ev("P1", "outcome", "ok"), ev("P3", "outcome", "real_cert"), ev("P2", "outcome", "mask_cert")), "profile.reality", Likely},
+		{"клиент работает, а индикатор задержки — таймаут", with(v2rayn("chrome", true), ev("C10", "listening", true, "outcome", "ok"),
+			ev("P3", "outcome", "ok"), ev("B3", "tunnel_ok", false)), "beyond.latency_url", Likely},
+		{"клиент работает — таблица версий не спорит с фактом", with(hiddify(), ev("C10", "listening", true, "outcome", "ok")), "ok.client", Confirmed},
 		// ОС.
 		{"системный прокси в никуда", with(v2rayn("chrome", true), ev("W6", "system_proxy", true, "proxy_local", true, "proxy_listening", false)), "os.proxy.dead", Likely},
 	}
@@ -100,7 +118,7 @@ func TestScenarios(t *testing.T) {
 		if v.Main.Code != c.code || v.Main.Level != c.level {
 			t.Errorf("%s: вердикт %s/%s, ожидалось %s/%s (возможно: %v)", c.name, v.Main.Code, v.Main.Level, c.code, c.level, codes(v.Possible))
 		}
-		if strings.Contains(v.Main.Title, "{") {
+		if strings.Contains(v.Main.Title, "{") || strings.Contains(strings.Join(v.Main.Actions, " "), "{") {
 			t.Errorf("%s: неподставленный шаблон в %q", c.name, v.Main.Title)
 		}
 		if strings.HasPrefix(v.Main.Code, "path.") && v.Main.Level == Likely && v.Main.Alternative == "" {
@@ -178,6 +196,21 @@ func TestEveryCodeHasScenarioText(t *testing.T) {
 		}
 		if h.Kind == "" && len(h.Actions) == 0 {
 			t.Errorf("%s без actions", h.Code)
+		}
+	}
+}
+
+// Скрин 3: проверка через сам клиент — в уликах подтверждённой причины.
+func TestClientTunnelInEvidence(t *testing.T) {
+	e, _ := Load()
+	v := e.Decide(evidence.FromList(append(base(), hiddify(), ev("C10", "listening", true, "outcome", "fail"),
+		ev("P1", "outcome", "ok"), ev("P3", "outcome", "ok"), ev("P3m", "outcome", "real_cert"))))
+	if !strings.Contains(","+strings.Join(v.Main.Evidence, ",")+",", ",C10,") {
+		t.Fatalf("улики: %v", v.Main.Evidence)
+	}
+	for _, r := range v.Also {
+		if r.Code == "client.tunnel" {
+			t.Fatal("client.tunnel дублирует client.core.mlkem")
 		}
 	}
 }

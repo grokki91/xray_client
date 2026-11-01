@@ -251,7 +251,7 @@ func Run(ctx context.Context, o Options) Result {
 	res.Status = status
 	if err == nil && status == http.StatusNoContent {
 		if o.Download != "" {
-			n, ms, stalled := download(ctx, hc, o.Download, o.DownloadBytes, o.Stall)
+			n, ms, stalled := netprobe.Download(ctx, hc, o.Download, o.DownloadBytes, o.Stall)
 			res.Bytes, res.DownloadMs = n, ms
 			if stalled {
 				res.Outcome = "freeze"
@@ -404,61 +404,6 @@ func getStatus(ctx context.Context, hc *http.Client, u string) (int, error) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	resp.Body.Close()
 	return resp.StatusCode, nil
-}
-
-// download читает до limit байт; stalled — не было прогресса stall.
-func download(ctx context.Context, hc *http.Client, u string, limit int, stall time.Duration) (int64, int, bool) {
-	if limit <= 0 {
-		limit = 65536
-	}
-	c, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	t0 := time.Now()
-	req, err := http.NewRequestWithContext(c, http.MethodGet, u, nil)
-	if err != nil {
-		return 0, 0, false
-	}
-	var n atomic.Int64
-	done := make(chan error, 1)
-	go func() {
-		resp, err := hc.Do(req)
-		if err != nil {
-			done <- err
-			return
-		}
-		defer resp.Body.Close()
-		buf := make([]byte, 8192)
-		for n.Load() < int64(limit) {
-			k, err := resp.Body.Read(buf)
-			n.Add(int64(k))
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					err = nil
-				}
-				done <- err
-				return
-			}
-		}
-		done <- nil
-	}()
-	last, lastN := time.Now(), int64(0)
-	tick := time.NewTicker(250 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case err := <-done:
-			return n.Load(), int(time.Since(t0).Milliseconds()), err != nil && netprobe.Classify(err) == "timeout"
-		case <-tick.C:
-			if cur := n.Load(); cur != lastN {
-				last, lastN = time.Now(), cur
-			} else if time.Since(last) > stall {
-				cancel()
-				return cur, int(time.Since(t0).Milliseconds()), true
-			}
-		case <-c.Done():
-			return n.Load(), int(time.Since(t0).Milliseconds()), true
-		}
-	}
 }
 
 // ConfigJSON — конфиг ядра: один outbound VLESS по профилю, адрес — уже разрешённый IP.

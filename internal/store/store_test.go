@@ -57,3 +57,19 @@ func TestVaultSessionsRetention(t *testing.T) {
 		t.Fatalf("%+v", st)
 	}
 }
+
+func TestBudgetFilePerServer(t *testing.T) {
+	now := time.Unix(3_000_000, 0)
+	old := BudgetFile{Server: "aaa", TLS: []time.Time{now.Add(-30 * time.Second)}, TCP: []time.Time{now.Add(-30 * time.Second)}}
+	if m := old.For("aaa"); len(m.TLS) != 1 || len(old.For("bbb").TCP) != 0 {
+		t.Fatalf("старый формат: %+v", m)
+	}
+	old.Set("bbb", ServerMarks{TCP: []time.Time{now}}, now)
+	if old.Server != "" || len(old.For("aaa").TLS) != 1 || len(old.For("bbb").TCP) != 1 {
+		t.Fatalf("перенос: %+v", old)
+	}
+	old.Set("bbb", ServerMarks{TCP: []time.Time{now.Add(11 * time.Minute)}}, now.Add(11*time.Minute))
+	if _, ok := old.Servers["aaa"]; ok {
+		t.Fatal("сервер без отметок за 10 минут не забыт")
+	}
+}

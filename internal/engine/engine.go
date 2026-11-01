@@ -73,6 +73,7 @@ type Step struct {
 	Title  string `json:"title"`
 	Status string `json:"status"` // run | ok | warn | fail | skip
 	Note   string `json:"note,omitempty"`
+	Wait   int    `json:"wait,omitempty"` // шаг ждёт столько секунд (пауза бюджета, повтор) — окно ведёт отсчёт
 }
 
 // Consent — запрос согласия пользователя.
@@ -94,7 +95,6 @@ type Hooks struct {
 type Engine struct {
 	Rules    *rules.Engine
 	Store    *store.Store
-	Budget   *netprobe.Budget
 	Adapters []clients.Adapter
 
 	CollectOS func(ctx context.Context, exe []string) osw.Facts
@@ -103,9 +103,36 @@ type Engine struct {
 	RunRef    func(ctx context.Context, o refcore.Options) refcore.Result
 	Capture   func(ctx context.Context, job string, selfExe string) error
 	Resolver  *net.Resolver // nil — системный (тесты подставляют свой)
+	// LocalOpen — слушает ли 127.0.0.1:port (локальный прокси клиента); nil — не проверять.
+	LocalOpen func(port int) bool
+	// ProbeClient — C10: запрос через локальный прокси клиента (port 0 — по системному маршруту).
+	ProbeClient func(ctx context.Context, port int, probe204, download string, limit int) netprobe.ClientResult
 
 	mu      sync.Mutex
 	running bool
+
+	budgetMu sync.Mutex
+	budgets  map[string]*netprobe.Budget // ключ — Profile.ServerKey(): у каждого сервера свой лимит
+}
+
+// Budget — бюджет проб к серверу key (хэш адреса и порта). Создаётся при первом обращении и
+// подхватывает отметки прошлых запусков из store (CLI запускается заново на каждый сеанс).
+func (e *Engine) Budget(key string) *netprobe.Budget {
+	e.budgetMu.Lock()
+	defer e.budgetMu.Unlock()
+	if b := e.budgets[key]; b != nil {
+		return b
+	}
+	b := netprobe.NewBudget()
+	if e.Store != nil {
+		m := e.Store.LoadBudget().For(key)
+		b.Restore(netprobe.Snapshot{TLS: m.TLS, TCP: m.TCP})
+	}
+	if e.budgets == nil {
+		e.budgets = map[string]*netprobe.Budget{}
+	}
+	e.budgets[key] = b
+	return b
 }
 
 // SSHBridge — мост (интерфейс ради тестов).
@@ -121,8 +148,8 @@ func New(st *store.Store) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &Engine{Rules: re, Store: st, Budget: netprobe.NewBudget(), Adapters: clients.All(),
-		CollectOS: osw.Collect, RunRef: refcore.Run}
+	e := &Engine{Rules: re, Store: st, Adapters: clients.All(), CollectOS: osw.Collect, RunRef: refcore.Run,
+		LocalOpen: netprobe.LocalListening, ProbeClient: netprobe.ProbeViaClient}
 	e.NewEnv = func(f *osw.Facts) *clients.Env { return clients.DefaultEnv(f, re.Compat) }
 	e.NewSSH = func(alias string) (SSHBridge, error) { return bridge.NewSSH(alias) }
 	return e, nil
@@ -147,6 +174,7 @@ type SessionData struct {
 	Budget       netprobe.Usage      `json:"budget"`
 	Bridge       string              `json:"bridge"`
 	OtherNetwork bool                `json:"other_network,omitempty"`
+	Cancelled    bool                `json:"cancelled,omitempty"` // остановлен до конца проверок
 	Secret       *Secret             `json:"secret,omitempty"`
 }
 
@@ -156,6 +184,7 @@ type Secret struct {
 	Server string `json:"server"`
 	Port   int    `json:"port"`
 	SNI    string `json:"sni"`
+	Name   string `json:"name,omitempty"` // имя профиля у пользователя: окно показывает, что проверялось
 }
 
 // ClientInfo — клиент без путей.
@@ -193,6 +222,9 @@ type run struct {
 	all      []*clientRun
 	serverIP []net.IP
 	mu       sync.Mutex
+
+	budget      *netprobe.Budget // бюджет сервера профиля (фаза 2)
+	budgetStart netprobe.Usage   // расход на начало сеанса — в отчёт идёт разница
 }
 
 type clientRun struct {
@@ -235,10 +267,11 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 	for _, hst := range r.hosts().PublicHosts() {
 		r.red.Keep(hst)
 	}
-	if h.Budget != nil {
-		e.Budget.OnChange(h.Budget)
-		defer e.Budget.OnChange(nil)
-	}
+	defer func() {
+		if r.budget != nil {
+			r.budget.OnChange(nil)
+		}
+	}()
 
 	r.phase0(ctx)
 	if !o.Offline && ctx.Err() == nil {
@@ -258,6 +291,7 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 	}
 	r.finish()
 	if ctx.Err() != nil {
+		r.sess.Cancelled = true
 		r.note("Сеанс прерван: вердикт — по собранным уликам")
 	}
 	return r.sess, nil
@@ -279,6 +313,13 @@ func (r *run) step(phase int, id, title, status, note string) {
 	r.mu.Unlock()
 	if r.h.Progress != nil {
 		r.h.Progress(s)
+	}
+}
+
+// stepWait — шаг ждёт secs секунд (окно показывает обратный отсчёт).
+func (r *run) stepWait(phase int, id, title string, secs int, note string) {
+	if r.h.Progress != nil {
+		r.h.Progress(Step{Phase: phase, ID: id, Title: title, Status: "run", Note: note, Wait: secs})
 	}
 }
 
@@ -315,22 +356,26 @@ func (r *run) finish() {
 	r.sess.Verdict = v
 	r.sess.Evidence = r.set.All()
 	r.sess.Finished = r.now()
-	r.sess.Budget = r.e.Budget.Usage()
+	if r.budget != nil {
+		r.sess.Budget = r.budget.Usage().Since(r.budgetStart)
+	} else {
+		r.sess.Budget = netprobe.NewBudget().Usage()
+	}
 	if r.prof != nil {
 		s := r.prof.Summary()
 		r.sess.Profile = &s
-		r.sess.Secret = &Secret{Server: r.prof.Address, Port: r.prof.Port, SNI: r.prof.SNI}
+		r.sess.Secret = &Secret{Server: r.prof.Address, Port: r.prof.Port, SNI: r.prof.SNI, Name: strings.TrimSpace(r.prof.Name)}
 	}
-	if r.e.Store != nil {
+	if r.e.Store != nil && r.prof != nil && r.budget != nil {
+		key := r.prof.ServerKey()
 		bf := r.e.Store.LoadBudget()
-		snap := r.e.Budget.Snapshot()
-		if r.prof != nil {
-			bf.Server = r.prof.ServerKey()
-		}
-		bf.TLS, bf.TCP = snap.TLS, snap.TCP
+		m := bf.For(key)
+		snap := r.budget.Snapshot()
+		m.TLS, m.TCP = snap.TLS, snap.TCP
 		if strings.HasPrefix(v.Main.Code, "path.") {
-			bf.LastPath = r.now()
+			m.LastPath = r.now()
 		}
+		bf.Set(key, m, r.now())
 		_ = r.e.Store.SaveBudget(bf)
 	}
 }
