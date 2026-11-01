@@ -103,20 +103,30 @@ func (r *run) phase1(ctx context.Context) {
 		r.put(evidence.Evidence{ID: "N4", Source: evidence.FromNetwork, Reliability: evidence.Medium,
 			Facts: map[string]any{"ok": false, "stage": "dns"}, Summary: "Сайт-маска: " + maskErr})
 	}
+	if okN > 0 && ctx.Err() == nil {
+		r.clientTunnel(ctx)
+	}
 }
 
-// phase2 — сервер снаружи, в бюджете.
+// phase2 — сервер снаружи, в бюджете этого сервера. Порядок экономит соединения: TCP (P1) →
+// эталон (P3, при необходимости P3m) → обычный TLS с SNI маски (P2) — только если эталон не
+// прошёл: тогда он отличает «сервер жив, профиль не принят» от «ClientHello режется». TCP не
+// установился — эталону и TLS не на чем работать: один повтор через 30 с (P4).
 func (r *run) phase2(ctx context.Context) {
 	if r.prof == nil {
 		r.step(2, "P", "Сервер снаружи", "skip", "нет профиля")
 		return
 	}
+	key := r.prof.ServerKey()
+	r.budget = r.e.Budget(key)
+	r.budgetStart = r.budget.Usage()
+	if r.h.Budget != nil {
+		r.budget.OnChange(r.h.Budget)
+		r.h.Budget(r.budget.Usage())
+	}
 	if r.e.Store != nil {
-		if bf := r.e.Store.LoadBudget(); bf.Server == r.prof.ServerKey() {
-			r.e.Budget.Restore(netprobe.Snapshot{TLS: bf.TLS, TCP: bf.TCP})
-			if !bf.LastPath.IsZero() && r.now().Sub(bf.LastPath) < 2*time.Minute {
-				r.note("Прошлый сеанс меньше 2 минут назад закончился вердиктом о пути: частые пробы сами похожи на шторм — лучше подождать")
-			}
+		if lp := r.e.Store.LoadBudget().For(key).LastPath; !lp.IsZero() && r.now().Sub(lp) < 2*time.Minute {
+			r.note("Прошлый сеанс меньше 2 минут назад закончился вердиктом о пути: частые пробы сами похожи на шторм — лучше подождать")
 		}
 	}
 	ips, err := netprobe.LookupHost(ctx, r.res, r.prof.Address)
@@ -132,43 +142,175 @@ func (r *run) phase2(ctx context.Context) {
 	r.routeEvidence(ip.String())
 
 	r.step(2, "P1", "TCP до сервера", "run", "")
-	p1 := netprobe.ProbeTCP(ctx, r.dial, r.e.Budget, addr)
+	if !r.slot(ctx, netprobe.TCP, "P1", "TCP до сервера") {
+		if ctx.Err() != nil {
+			return
+		}
+		r.put(evidence.Evidence{ID: "P1", Source: evidence.FromNetwork, Reliability: evidence.High,
+			Facts: map[string]any{"outcome": "budget"}, Summary: "TCP до порта сервера: " + tcpText(netprobe.TCPResult{Outcome: "budget"})})
+		r.step(2, "P1", "TCP до сервера", "skip", tcpText(netprobe.TCPResult{Outcome: "budget"}))
+		return
+	}
+	p1 := netprobe.ProbeTCP(ctx, r.dial, r.budget, addr)
 	r.put(evidence.Evidence{ID: "P1", Source: evidence.FromNetwork, Reliability: evidence.High,
 		Facts: map[string]any{"outcome": p1.Outcome, "ms": p1.Ms}, Summary: "TCP до порта сервера: " + tcpText(p1)})
 	r.step(2, "P1", "TCP до сервера", stepStatus(p1.Outcome == "ok"), tcpText(p1))
+	if ctx.Err() != nil || p1.Outcome == "budget" {
+		return
+	}
+	if p1.Outcome != "ok" {
+		r.step(2, "P3", refTitle, "skip", "не выполнялось: TCP до сервера не установился")
+		r.repeat(ctx, addr)
+		return
+	}
 
+	if r.o.Reference && r.prof.IsRealityVLESS() {
+		if o := r.reference(ctx); o == "ok" || o == "budget" || ctx.Err() != nil {
+			return
+		}
+	}
 	r.step(2, "P2", "TLS к серверу с SNI маски", "run", "")
-	p2 := netprobe.ProbeTLS(ctx, r.dial, r.e.Budget, addr, r.prof.SNI, 10*time.Second)
+	if !r.slot(ctx, netprobe.TLS, "P2", "TLS к серверу с SNI маски") {
+		r.step(2, "P2", "TLS к серверу с SNI маски", "skip", tlsText("budget", false))
+		return
+	}
+	p2 := netprobe.ProbeTLS(ctx, r.dial, r.budget, addr, r.prof.SNI, 10*time.Second)
 	p2o := tlsOutcome(p2)
 	r.put(evidence.Evidence{ID: "P2", Source: evidence.FromNetwork, Reliability: evidence.High,
 		Facts:   map[string]any{"outcome": p2o, "cert_valid": p2.CertValid, "ms": p2.Ms, "bytes_in": p2.BytesIn},
 		Summary: "Обычный TLS (fp chrome, SNI маски) на адрес сервера: " + tlsText(p2.Outcome, p2.CertValid)})
 	r.step(2, "P2", "TLS к серверу с SNI маски", stepStatus(p2o == "mask_cert"), tlsText(p2.Outcome, p2.CertValid))
+	if isHelloFail(p2o) {
+		r.repeat(ctx, addr)
+	}
+}
 
-	if r.o.Reference && r.prof.IsRealityVLESS() && ctx.Err() == nil {
-		r.reference(ctx)
+const refTitle = "Эталонное ядро Xray с профилем (fp chrome)"
+
+// repeat — P4: один повтор через 30 с, если первая попытка не прошла (снимает единичную потерю).
+func (r *run) repeat(ctx context.Context, addr string) {
+	if r.o.SkipRepeat || ctx.Err() != nil {
+		return
 	}
-	// P4 — один повтор через 30 с, если первая попытка не прошла (снимает единичную потерю).
-	if (p1.Outcome != "ok" || isHelloFail(p2o)) && !r.o.SkipRepeat && ctx.Err() == nil {
-		r.step(2, "P4", "Повтор через 30 с", "run", "")
-		select {
-		case <-ctx.Done():
+	r.stepWait(2, "P4", "Повтор через 30 с", 30, "повтор через 30 с: единичную потерю пакета не путать с блокировкой")
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+	}
+	r.step(2, "P4", "Повтор через 30 с", "run", "")
+	if !r.slot(ctx, netprobe.TCP, "P4", "Повтор через 30 с") {
+		r.step(2, "P4", "Повтор через 30 с", "skip", tcpText(netprobe.TCPResult{Outcome: "budget"}))
+		return
+	}
+	t := netprobe.ProbeTCP(ctx, r.dial, r.budget, addr)
+	f := map[string]any{"tcp": t.Outcome}
+	sum := "Повтор: TCP — " + tcpText(t)
+	if t.Outcome == "ok" && r.budget.Can(netprobe.TLS) {
+		s := netprobe.ProbeTLS(ctx, r.dial, r.budget, addr, r.prof.SNI, 10*time.Second)
+		f["tls"] = tlsOutcome(s)
+		sum += "; TLS — " + tlsText(s.Outcome, s.CertValid)
+	} else if t.Outcome != "ok" {
+		f["tls"] = "tcp_" + t.Outcome
+	}
+	r.put(evidence.Evidence{ID: "P4", Source: evidence.FromNetwork, Reliability: evidence.High, Facts: f, Summary: sum})
+	r.step(2, "P4", "Повтор через 30 с", stepStatus(t.Outcome == "ok"), sum)
+}
+
+// slot — дождаться слота бюджета сервера для пробы. Пауза до 65 с — сама (шаг ведёт отсчёт),
+// дольше — с согласия пользователя. false — проба не выполняется.
+func (r *run) slot(ctx context.Context, k netprobe.Kind, id, title string) bool {
+	w := r.budget.Wait(k)
+	if w <= 0 {
+		return true
+	}
+	secs := int(w.Seconds()) + 1
+	if w > 65*time.Second && !r.confirm(ctx, Consent{Kind: "wait", Text: fmt.Sprintf("К этому серверу только что было несколько проверок. "+
+		"Чтобы диагностика сама не выглядела как шторм, приложение открывает к серверу не больше %d TLS-соединений в минуту и %d TCP за 5 минут. "+
+		"Следующая проба — через %s. Подождать?", r.budget.TLSMax, r.budget.TCPMax, humanSecs(secs))}) {
+		r.note(title + ": пропущено — лимит проб к серверу (повторите диагностику через " + humanSecs(secs) + ")")
+		return false
+	}
+	r.stepWait(2, id, title, secs, fmt.Sprintf("пауза %s: не больше %d TLS к серверу в минуту", humanSecs(secs), r.budget.TLSMax))
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(w + time.Second):
+	}
+	r.step(2, id, title, "run", "")
+	return true
+}
+
+func humanSecs(s int) string {
+	if s < 90 {
+		return fmt.Sprintf("%d с", s)
+	}
+	return fmt.Sprintf("%d мин %02d с", s/60, s%60)
+}
+
+// clientTunnel — C10: работает ли сам клиент — запрос через его локальный прокси (тот же путь,
+// что у браузера через VPN). Это единственная проверка, которая видит «клиент подключён и
+// трафик идёт», а не только «сервер и профиль исправны».
+func (r *run) clientTunnel(ctx context.Context) {
+	if r.active == nil || r.e.ProbeClient == nil {
+		return
+	}
+	cr := r.active
+	name := r.sess.ClientName
+	title := "Подключение через " + cr.a.Title()
+	port := cr.d.ProxyPort
+	via := "proxy"
+	if !cr.state.CoreListening {
+		// Режим VPN без локального прокси: трафик Windows уже идёт в TUN клиента.
+		if cr.state.TunAdapter && r.facts.DefaultViaTUN {
+			port, via = 0, "tun"
+		} else {
+			r.put(evidence.Evidence{ID: "C10", Source: evidence.FromClient, Reliability: evidence.High,
+				Facts:   map[string]any{"listening": false, "outcome": "not_listening", "port": port},
+				Summary: fmt.Sprintf("%s не подключён: локальный прокси :%d не слушает", name, port)})
+			r.step(1, "C10", title, "skip", "клиент не подключён")
 			return
-		case <-time.After(30 * time.Second):
 		}
-		t := netprobe.ProbeTCP(ctx, r.dial, r.e.Budget, addr)
-		f := map[string]any{"tcp": t.Outcome}
-		sum := "Повтор: TCP — " + tcpText(t)
-		if t.Outcome == "ok" && r.e.Budget.Can(netprobe.TLS) {
-			s := netprobe.ProbeTLS(ctx, r.dial, r.e.Budget, addr, r.prof.SNI, 10*time.Second)
-			f["tls"] = tlsOutcome(s)
-			sum += "; TLS — " + tlsText(s.Outcome, s.CertValid)
-		} else if t.Outcome != "ok" {
-			f["tls"] = "tcp_" + t.Outcome
-		}
-		r.put(evidence.Evidence{ID: "P4", Source: evidence.FromNetwork, Reliability: evidence.High, Facts: f, Summary: sum})
-		r.step(2, "P4", "Повтор через 30 с", stepStatus(t.Outcome == "ok"), sum)
 	}
+	r.step(1, "C10", title, "run", "")
+	h := r.hosts()
+	res := r.e.ProbeClient(ctx, port, h.Tunnel.Probe204, h.Tunnel.Download, h.Tunnel.DownloadBytes)
+	f := map[string]any{"listening": true, "outcome": res.Outcome, "ms_204": res.Ms204, "bytes": res.Bytes, "via": via, "port": port}
+	if res.Error != "" {
+		f["error"] = res.Error
+	}
+	where := fmt.Sprintf("через локальный прокси :%d", port)
+	if via == "tun" {
+		where = "через TUN клиента"
+	}
+	var sum, note, st string
+	switch res.Outcome {
+	case "ok":
+		sum = fmt.Sprintf("%s: трафик через клиент идёт (%s) — 204 за %d мс, скачано %d КБ", name, where, res.Ms204, res.Bytes/1024)
+		note, st = fmt.Sprintf("трафик идёт: 204 за %d мс", res.Ms204), "ok"
+	case "freeze":
+		sum = fmt.Sprintf("%s: через клиент 204 получен, но загрузка встала на %d КБ", name, res.Bytes/1024)
+		note, st = "загрузка встала", "warn"
+	default:
+		sum = fmt.Sprintf("%s запущен, но запрос через него не прошёл (%s): %s", name, where, clientErrText(res))
+		note, st = "трафик не идёт: "+clientErrText(res), "fail"
+	}
+	r.put(evidence.Evidence{ID: "C10", Source: evidence.FromClient, Reliability: evidence.High, Facts: f, Summary: sum})
+	r.step(1, "C10", title, st, note)
+}
+
+func clientErrText(c netprobe.ClientResult) string {
+	switch c.Error {
+	case "timeout":
+		return "таймаут"
+	case "refused":
+		return "прокси отказал в соединении"
+	case "reset", "eof":
+		return "соединение оборвано"
+	case "status":
+		return fmt.Sprintf("ответ %d вместо 204", c.Status)
+	}
+	return "ошибка"
 }
 
 func isHelloFail(o string) bool {
@@ -199,8 +341,8 @@ func (r *run) routeEvidence(ip string) {
 }
 
 // reference — P3 (fp chrome) и, если клиент X25519MLKEM768 не шлёт, P3m (fp edge — без него):
-// одна и та же попытка с одним отличием — доля X25519MLKEM768.
-func (r *run) reference(ctx context.Context) {
+// одна и та же попытка с одним отличием — доля X25519MLKEM768. Возвращает исход P3.
+func (r *run) reference(ctx context.Context) string {
 	h := r.hosts()
 	extra := map[string]string{}
 	if r.active != nil && r.active.d.TestURL != "" {
@@ -210,10 +352,19 @@ func (r *run) reference(ctx context.Context) {
 		extra["ru"] = h.Tunnel.RUProbe
 	}
 	opts := func(fp string, ex map[string]string) refcore.Options {
-		return refcore.Options{Profile: r.prof, Fingerprint: fp, ServerIPs: r.serverIP, Dialer: r.dial, Resolver: r.res, Budget: r.e.Budget,
+		return refcore.Options{Profile: r.prof, Fingerprint: fp, ServerIPs: r.serverIP, Dialer: r.dial, Resolver: r.res, Budget: r.budget,
 			Probe204: h.Tunnel.Probe204, Download: h.Tunnel.Download, DownloadBytes: h.Tunnel.DownloadBytes, Extra: ex}
 	}
-	r.step(2, "P3", "Эталонное ядро Xray с профилем (fp chrome)", "run", "")
+	r.step(2, "P3", refTitle, "run", "")
+	if !r.slot(ctx, netprobe.TLS, "P3", refTitle) {
+		if ctx.Err() != nil {
+			return "cancelled"
+		}
+		r.put(evidence.Evidence{ID: "P3", Source: evidence.FromReference, Reliability: evidence.High,
+			Facts: map[string]any{"outcome": "budget"}, Summary: refText(refcore.Result{Outcome: "budget"})})
+		r.step(2, "P3", refTitle, "skip", refText(refcore.Result{Outcome: "budget"}))
+		return "budget"
+	}
 	res := r.e.RunRef(ctx, opts("chrome", extra))
 	for _, l := range res.Logs {
 		if strings.Contains(l, "REALITY") || strings.Contains(l, "failed") || strings.Contains(l, "x509") {
@@ -223,7 +374,7 @@ func (r *run) reference(ctx context.Context) {
 	f := map[string]any{"outcome": res.Outcome, "freeze": res.Freeze, "status": res.Status, "ms_204": res.Ms204, "bytes": res.Bytes,
 		"socket_in": res.SocketIn, "conns": res.Conns}
 	r.put(evidence.Evidence{ID: "P3", Source: evidence.FromReference, Reliability: evidence.High, Facts: f, Summary: refText(res)})
-	r.step(2, "P3", "Эталонное ядро Xray с профилем (fp chrome)", stepStatus(res.Outcome == "ok"), refText(res))
+	r.step(2, "P3", refTitle, stepStatus(res.Outcome == "ok"), refText(res))
 	if res.Outcome == "ok" {
 		r.put(evidence.Evidence{ID: "B1", Source: evidence.FromReference, Reliability: evidence.High,
 			Facts: map[string]any{"dns_ok": true}, Summary: "Имена за тоннелем разрешаются (запрос по имени через сервер прошёл)"})
@@ -242,26 +393,31 @@ func (r *run) reference(ctx context.Context) {
 	cx := r.set.Get("CX")
 	needM := res.Outcome == "ok" && cx != nil && (cx.Str("core_mlkem") == "false" || cx.Str("fp_mlkem") == "false")
 	if !needM || ctx.Err() != nil {
-		return
+		return res.Outcome
 	}
-	if w := r.e.Budget.WaitTLS(); w > 0 {
-		if w > 65*time.Second || !r.confirm(ctx, Consent{Kind: "wait", Text: fmt.Sprintf("Для контрольной пробы без X25519MLKEM768 нужно подождать %d с (не больше 3 TLS к серверу в минуту). Ждать?", int(w.Seconds())+1)}) {
-			r.note("Контрольная проба без X25519MLKEM768 пропущена: бюджет проб к серверу")
-			return
-		}
-		r.step(2, "P3m", "Эталон без X25519MLKEM768 (fp edge)", "run", fmt.Sprintf("ждём бюджет %d с", int(w.Seconds())+1))
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(w + time.Second):
-		}
+	const mTitle = "Эталон без X25519MLKEM768 (fp edge)"
+	r.step(2, "P3m", mTitle, "run", "")
+	if !r.slot(ctx, netprobe.TLS, "P3m", mTitle) {
+		r.step(2, "P3m", mTitle, "skip", "пропущено: лимит проб к серверу")
+		return res.Outcome
 	}
-	r.step(2, "P3m", "Эталон без X25519MLKEM768 (fp edge)", "run", "")
 	m := r.e.RunRef(ctx, opts("edge", nil))
 	r.put(evidence.Evidence{ID: "P3m", Source: evidence.FromReference, Reliability: evidence.High,
 		Facts:   map[string]any{"outcome": m.Outcome, "conns": m.Conns},
 		Summary: "Тот же профиль без X25519MLKEM768 (fp edge): " + refText(m)})
-	r.step(2, "P3m", "Эталон без X25519MLKEM768 (fp edge)", stepStatus(m.Outcome == "real_cert"), refText(m))
+	client := "клиент"
+	if r.sess.ClientName != "" {
+		client = r.sess.ClientName
+	}
+	switch m.Outcome {
+	case "ok":
+		r.step(2, "P3m", mTitle, "ok", "сервер пускает и без X25519MLKEM768 — "+client+" с ним совместим")
+	case "real_cert":
+		r.step(2, "P3m", mTitle, "fail", "сервер не пускает ClientHello без X25519MLKEM768 — "+client+" не подключится")
+	default:
+		r.step(2, "P3m", mTitle, "warn", refText(m))
+	}
+	return res.Outcome
 }
 
 func stepStatus(ok bool) string {
@@ -282,7 +438,7 @@ func tcpText(t netprobe.TCPResult) string {
 	case "unreachable":
 		return "сеть недоступна"
 	case "budget":
-		return "пропущено: бюджет проб"
+		return "пропущено: лимит проб к серверу"
 	}
 	return t.Outcome
 }
@@ -319,7 +475,7 @@ func tlsText(o string, valid bool) string {
 	case "tcp_unreachable":
 		return "TCP: сеть недоступна"
 	case "budget":
-		return "пропущено: бюджет проб"
+		return "пропущено: лимит проб к серверу"
 	}
 	return o
 }
@@ -345,7 +501,7 @@ func refText(r refcore.Result) string {
 	case "fp_unsupported":
 		return "отпечаток не поддерживает TLS 1.3"
 	case "budget":
-		return "пропущено: бюджет проб к серверу"
+		return "пропущено: лимит проб к серверу"
 	case "config_error":
 		return "профиль не собирается в конфиг Xray"
 	}

@@ -34,7 +34,7 @@
     - ["S3.code=server.listen"]
   likely:
     - ["P1.outcome=refused", "N1.ok=true"]
-  excluded: ["P2.outcome=mask_cert", "P3.outcome=ok|real_cert"]
+  excluded: ["P2.outcome=mask_cert", "P3.outcome=ok|real_cert", "C10.outcome=ok"]
   title: "Сервер: Xray не слушает публичный порт"
   why: "На порт сервера приходит отказ (RST): соединение доходит, но принимать его некому."
   alternative: "RST вместо сервера может прислать файрвол роутера или провайдера; подтвердит самопроверка сервера (мост) или `sudo xm doctor`."

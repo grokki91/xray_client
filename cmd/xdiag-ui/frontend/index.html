@@ -27,7 +27,7 @@
 <main>
   <section id="tab-run" class="panel active">
     <div class="runbar card">
-      <button id="go" class="primary">Диагностировать</button>
+      <button id="go" class="primary"><span class="btnspin" aria-hidden="true"></span><span id="goText">Диагностировать</span></button>
       <button id="stop" class="ghost" hidden>Остановить</button>
       <div class="opts">
         <label>Клиент
@@ -49,6 +49,30 @@
       </div>
     </div>
 
+    <div id="scan" class="card scan" hidden aria-live="polite">
+      <div class="scanhead">
+        <span class="spinner" aria-hidden="true"></span>
+        <b id="scanTitle">Идёт диагностика…</b>
+        <span class="grow"></span>
+        <span id="scanTime" class="muted">0:00</span>
+      </div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div id="barFill" class="fill"></div></div>
+      <div id="scanStep" class="scanstep muted">Подготовка…</div>
+    </div>
+
+    <div id="summary" class="card summary" hidden>
+      <div class="sumrow">
+        <div id="sIcon" class="sicon" aria-hidden="true"></div>
+        <div class="stext">
+          <div id="sHead" class="shead"></div>
+          <div id="sTitle" class="stitle"></div>
+          <div class="chips"><span id="sConf" class="chip"></span><span id="sWhere" class="chip"></span><span id="sWhen" class="chip muted"></span></div>
+        </div>
+      </div>
+      <div id="sTarget" class="target"></div>
+      <ol id="chain" class="chain"></ol>
+    </div>
+
     <div class="grid">
       <div class="card progress">
         <h2>Ход проверок</h2>
@@ -57,22 +81,15 @@
       </div>
 
       <div class="card verdict" id="verdict" hidden>
-        <div class="vhead">
-          <span id="vLevel" class="badge"></span>
-          <span id="vWhere" class="muted"></span>
-        </div>
-        <p id="vProblem" class="problem"></p>
-        <h2 id="vTitle"></h2>
+        <h3 class="first">Почему так</h3>
         <p id="vWhy"></p>
         <p id="vAlt" class="alt"></p>
-        <h3>Улики</h3>
-        <ul id="vEvidence" class="ev"></ul>
-        <h3>Что делать</h3>
-        <ol id="vActions" class="actions"></ol>
+        <div id="vEvWrap"><h3>Улики</h3><ul id="vEvidence" class="ev"></ul></div>
+        <div id="vActWrap"><h3>Что делать</h3><ol id="vActions" class="actions"></ol></div>
         <div id="vNextWrap"><h3>Если не помогло</h3><ul id="vNext"></ul></div>
         <div id="vAlsoWrap"><h3>Также найдено</h3><ul id="vAlso"></ul></div>
-        <div id="vFindWrap"><h3>Важно знать</h3><ul id="vFind"></ul></div>
-        <div id="vRuledWrap"><h3>Исключено</h3><ul id="vRuled" class="ruled"></ul></div>
+        <div id="vFindWrap"><h3>Важно знать</h3><ul id="vFind" class="small"></ul></div>
+        <details id="vRuledWrap" class="ruledbox"><summary id="vRuledSum">Исключено</summary><ul id="vRuled" class="ruled"></ul></details>
         <div class="vfoot">
           <button id="copy" class="ghost">Скопировать отчёт (без адресов)</button>
           <button id="export" class="ghost">Экспорт JSON…</button>

@@ -294,12 +294,59 @@ func (s *Store) Prune(days int, now time.Time) int {
 
 // ─── Бюджет проб между запусками ─────────────────────────────────────────────
 
-// BudgetFile — отметки соединений к серверу (без адреса: ключ — хэш).
+// BudgetFile — отметки соединений к серверам (без адресов: ключ — хэш адреса и порта). Бюджет
+// у каждого сервера свой: проверка второго профиля сразу после первого не ждёт чужой лимит.
 type BudgetFile struct {
-	Server   string      `json:"server"`
-	TLS      []time.Time `json:"tls"`
-	TCP      []time.Time `json:"tcp"`
+	Servers map[string]ServerMarks `json:"servers,omitempty"`
+
+	// Формат до 2026-11: один сервер. Читается, при записи переносится в Servers.
+	Server   string      `json:"server,omitempty"`
+	TLS      []time.Time `json:"tls,omitempty"`
+	TCP      []time.Time `json:"tcp,omitempty"`
+	LastPath time.Time   `json:"last_path_verdict,omitempty"`
+}
+
+// ServerMarks — отметки одного сервера.
+type ServerMarks struct {
+	TLS      []time.Time `json:"tls,omitempty"`
+	TCP      []time.Time `json:"tcp,omitempty"`
 	LastPath time.Time   `json:"last_path_verdict,omitempty"` // последний сеанс с вердиктом path.*
+}
+
+// For — отметки сервера key.
+func (b BudgetFile) For(key string) ServerMarks {
+	if m, ok := b.Servers[key]; ok {
+		return m
+	}
+	if b.Server != "" && b.Server == key {
+		return ServerMarks{TLS: b.TLS, TCP: b.TCP, LastPath: b.LastPath}
+	}
+	return ServerMarks{}
+}
+
+// Set — записать отметки сервера; серверы без отметок за последние 10 минут забываются.
+func (b *BudgetFile) Set(key string, m ServerMarks, now time.Time) {
+	if b.Servers == nil {
+		b.Servers = map[string]ServerMarks{}
+	}
+	if b.Server != "" {
+		if _, ok := b.Servers[b.Server]; !ok && b.Server != key {
+			b.Servers[b.Server] = ServerMarks{TLS: b.TLS, TCP: b.TCP, LastPath: b.LastPath}
+		}
+		b.Server, b.TLS, b.TCP, b.LastPath = "", nil, nil, time.Time{}
+	}
+	b.Servers[key] = m
+	for k, v := range b.Servers {
+		last := v.LastPath
+		for _, t := range append(append([]time.Time{}, v.TLS...), v.TCP...) {
+			if t.After(last) {
+				last = t
+			}
+		}
+		if now.Sub(last) > 10*time.Minute {
+			delete(b.Servers, k)
+		}
+	}
 }
 
 func (s *Store) LoadBudget() BudgetFile {

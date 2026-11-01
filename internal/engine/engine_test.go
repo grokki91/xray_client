@@ -36,10 +36,17 @@ func write(t *testing.T, p, s string) {
 }
 
 // hiddifyDir — каталог данных Hiddify 4.1.2 с профилем на стенд (как его пишет приложение).
-func hiddifyDir(t *testing.T, s *sim.Sim, root string) {
+func hiddifyDir(t *testing.T, s *sim.Sim, root string) { hiddifyDirPort(t, s, root, 0) }
+
+// hiddifyDirPort — то же с портом локального прокси (mixed-port) Hiddify.
+func hiddifyDirPort(t *testing.T, s *sim.Sim, root string, mixed int) {
 	dir := filepath.Join(root, "Roaming", "Hiddify", "hiddify")
 	write(t, filepath.Join(root, "PF", "Hiddify", "Hiddify.exe"), "MZ")
-	write(t, filepath.Join(dir, "shared_preferences.json"), `{"flutter.service-mode":"system-proxy","flutter.connection-test-url":"`+s.URL("/generate_204")+`"}`)
+	mp := ""
+	if mixed > 0 {
+		mp = fmt.Sprintf(`,"flutter.mixed-port":%d`, mixed)
+	}
+	write(t, filepath.Join(dir, "shared_preferences.json"), `{"flutter.service-mode":"system-proxy","flutter.connection-test-url":"`+s.URL("/generate_204")+`"`+mp+`}`)
 	write(t, filepath.Join(dir, "configs", "p1.json"), fmt.Sprintf(`{"outbounds":[{"type":"vless","tag":"sim","server":"127.0.0.1","server_port":%d,
 	"uuid":"%s","tls":{"enabled":true,"server_name":"%s","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"enabled":true,
 	"public_key":"%s","short_id":"%s"}},"transport":{"type":"xhttp","path":"%s","mode":"auto"}}]}`, s.Port, sim.UUID, sim.SNI, s.PublicKey, sim.ShortID, sim.Path))
@@ -94,7 +101,7 @@ func testEngine(t *testing.T, s *sim.Sim, root string) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &Engine{Rules: re, Store: st, Budget: netprobe.NewBudget(), Adapters: clients.All(), RunRef: refcore.Run,
+	e := &Engine{Rules: re, Store: st, Adapters: clients.All(), RunRef: refcore.Run,
 		CollectOS: func(context.Context, []string) osw.Facts {
 			return osw.Facts{Collected: true, Services: map[string]string{}}
 		},
@@ -180,8 +187,8 @@ func TestHiddifyAgainstMlkemServer(t *testing.T) {
 	if get("B3")["tunnel_ok"] != true || get("S3")["rd_r"] != "mlkem" {
 		t.Fatalf("B3/S3: %v %v", get("B3"), get("S3"))
 	}
-	// Бюджет: P2 + P3 + P3m = 3 TLS за минуту, не больше.
-	if sess.Budget.TotalTLS != 3 || sess.Budget.Refused != 0 {
+	// Бюджет: P3 + P3m = 2 TLS (обычный TLS P2 не нужен, когда эталон прошёл) и P1 — 3 TCP.
+	if sess.Budget.TotalTLS != 2 || sess.Budget.TotalTCP != 3 || sess.Budget.Refused != 0 {
 		t.Fatalf("бюджет: %+v", sess.Budget)
 	}
 	// Ни одного секрета вне Secret.
@@ -222,7 +229,7 @@ func TestProfileOnlyOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sess.Verdict.Main.Code != "ok" || sess.Budget.TotalTLS != 2 {
+	if sess.Verdict.Main.Code != "ok" || sess.Budget.TotalTLS != 1 {
 		t.Fatalf("%s/%s, бюджет %+v", sess.Verdict.Main.Code, sess.Verdict.Main.Level, sess.Budget)
 	}
 }
@@ -264,5 +271,142 @@ func TestNoInternet(t *testing.T) {
 	}
 	if sess.Verdict.Main.Code != "lan.noinet" {
 		t.Fatalf("%s", sess.Verdict.Main.Code)
+	}
+}
+
+func evFacts(t *testing.T, sess *SessionData, id string) map[string]any {
+	t.Helper()
+	for _, x := range sess.Evidence {
+		if x.ID == id {
+			return x.Facts
+		}
+	}
+	t.Fatalf("нет улики %s", id)
+	return nil
+}
+
+// clientEngine — Hiddify с локальным прокси на стенде: works — клиент подключён и трафик идёт,
+// иначе прокси принимает соединение и молчит («Подключение…» / «Тайм-аут»).
+func clientEngine(t *testing.T, s *sim.Sim, works bool) (*Engine, func()) {
+	px, err := sim.StartProxy(works)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	hiddifyDirPort(t, s, root, px.Port)
+	e := testEngine(t, s, root)
+	e.LocalOpen = func(port int) bool { return port == px.Port }
+	e.ProbeClient = func(ctx context.Context, port int, u204, down string, n int) netprobe.ClientResult {
+		c, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		return netprobe.ProbeViaClient(c, port, u204, down, n)
+	}
+	return e, px.Close
+}
+
+// Скрин 1: клиент подключён и трафик через него идёт — «всё работает» (подтверждено), а не
+// «проверяется, почему клиент пишет таймаут».
+func TestClientConnectedWorks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("сетевой симулятор")
+	}
+	s, err := sim.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	e, done := clientEngine(t, s, true)
+	defer done()
+	sess, err := e.Run(context.Background(), Options{Reference: true, Hosts: testHosts(s), SkipRepeat: true}, Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Verdict.Main.Code != "ok.client" || sess.Verdict.Main.Level != rules.Confirmed {
+		t.Fatalf("вердикт %s/%s", sess.Verdict.Main.Code, sess.Verdict.Main.Level)
+	}
+	if c := evFacts(t, sess, "C10"); c["outcome"] != "ok" || c["bytes"].(float64) < 65536 {
+		t.Fatalf("C10: %v", c)
+	}
+	if sess.Secret == nil || sess.Secret.Name != "сервер" {
+		t.Fatalf("имя профиля для окна: %+v", sess.Secret)
+	}
+}
+
+// Скрин 3: Hiddify «Подключение…» на сервере с правилом X25519MLKEM768 — подтверждено, и
+// проверка через сам клиент — в уликах.
+func TestClientConnectingFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("сетевой симулятор")
+	}
+	s, err := sim.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	e, done := clientEngine(t, s, false)
+	defer done()
+	var steps []Step
+	sess, err := e.Run(context.Background(), Options{Reference: true, Hosts: testHosts(s), SkipRepeat: true},
+		Hooks{Progress: func(st Step) { steps = append(steps, st) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := sess.Verdict.Main
+	if v.Code != "client.core.mlkem" || v.Level != rules.Confirmed || !strings.Contains(strings.Join(v.Evidence, ","), "C10") {
+		t.Fatalf("вердикт %s/%s %v", v.Code, v.Level, v.Evidence)
+	}
+	if c := evFacts(t, sess, "C10"); c["outcome"] != "fail" || c["error"] != "timeout" {
+		t.Fatalf("C10: %v", c)
+	}
+	// P3m нашёл причину — шаг помечен как найденная проблема, а не «!».
+	for _, st := range steps {
+		if st.ID == "P3m" && st.Status != "run" && st.Status != "fail" {
+			t.Fatalf("P3m: %+v", st)
+		}
+	}
+}
+
+// Пробы к одному серверу не расходуют лимит другого, а лимит переживает перезапуск без удвоения
+// (было: второй сеанс подряд — все пробы «пропущено: бюджет»).
+func TestBudgetPerServer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("сетевой симулятор")
+	}
+	a, err := sim.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := sim.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	root := t.TempDir()
+	e := testEngine(t, a, root)
+	run := func(s *sim.Sim) *SessionData {
+		sess, err := e.Run(context.Background(), Options{Reference: true, Hosts: testHosts(s), ProfileURI: s.URI("chrome"), SkipRepeat: true}, Hooks{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sess
+	}
+	sa := run(a)
+	pb, _ := profile.ParseURI(b.URI("chrome"))
+	if u := e.Budget(pb.ServerKey()).Usage(); u.TLS != 0 || u.TCP != 0 {
+		t.Fatalf("сервер B получил расход сервера A: %+v", u)
+	}
+	sb := run(b)
+	for _, sess := range []*SessionData{sa, sb} {
+		if sess.Verdict.Main.Code != "ok" || sess.Budget.TotalTLS != 1 || sess.Budget.TotalTCP != 2 || sess.Budget.Refused != 0 {
+			t.Fatalf("%s, бюджет за сеанс %+v", sess.Verdict.Main.Code, sess.Budget)
+		}
+	}
+	pa, _ := profile.ParseURI(a.URI("chrome"))
+	e2 := testEngine(t, a, root) // новый процесс (CLI) с тем же каталогом данных
+	for i := 0; i < 2; i++ {
+		if u := e2.Budget(pa.ServerKey()).Usage(); u.TCP != 2 || u.TLS != 1 {
+			t.Fatalf("восстановлено %d: %+v", i, u)
+		}
 	}
 }

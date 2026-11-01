@@ -200,6 +200,7 @@ func cmdRun(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	in := bufio.NewReader(os.Stdin)
+	started := map[string]bool{}
 	hooks := engine.Hooks{
 		Progress: func(s engine.Step) {
 			if *asJSON {
@@ -207,7 +208,13 @@ func cmdRun(args []string) error {
 			}
 			mark := map[string]string{"run": "…", "ok": "✓", "warn": "!", "fail": "✗", "skip": "-"}[s.Status]
 			if s.Status == "run" {
-				fmt.Fprintf(os.Stderr, "  %s %s\n", mark, s.Title)
+				switch {
+				case s.Wait > 0:
+					fmt.Fprintf(os.Stderr, "  %s %s: %s\n", mark, s.Title, s.Note)
+				case !started[s.ID]:
+					fmt.Fprintf(os.Stderr, "  %s %s\n", mark, s.Title)
+				}
+				started[s.ID] = true
 				return
 			}
 			fmt.Fprintf(os.Stderr, "  %s %s%s\n", mark, s.Title, map[bool]string{true: ": " + s.Note, false: ""}[s.Note != ""])

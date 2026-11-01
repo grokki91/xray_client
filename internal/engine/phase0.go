@@ -21,7 +21,8 @@ func (r *run) phase0(ctx context.Context) {
 	if r.facts.Collected {
 		r.step(0, "W", "Факты Windows", "ok", fmt.Sprintf("адаптеров: %d", len(r.facts.Adapters)))
 	} else {
-		r.step(0, "W", "Факты Windows", "skip", r.facts.Err)
+		r.step(0, "W", "Факты Windows", "warn", "не собраны ("+r.facts.Err+"): проверки Windows пропущены")
+		r.note("Факты Windows не собраны: " + r.facts.Err)
 	}
 	env := r.e.NewEnv(&r.facts)
 	env.HiddifyDir, env.V2rayNDir = r.o.HiddifyDir, r.o.V2rayNDir
@@ -34,6 +35,14 @@ func (r *run) phase0(ctx context.Context) {
 			cr.ps, cr.perr = a.Profiles(ctx, env, cr.d)
 			cr.logs = a.Logs(env, cr.d, r.now().Add(-24*time.Hour))
 			cr.state = a.State(env, cr.d)
+			// Подключён ли клиент — по самому порту, без PowerShell: факты Windows могут не
+			// собраться, а порт отвечает сейчас.
+			if r.e.LocalOpen != nil && cr.d.ProxyPort > 0 {
+				cr.state.CoreListening = r.e.LocalOpen(cr.d.ProxyPort)
+				if cr.state.CoreListening {
+					cr.state.Running = true
+				}
+			}
 		}
 		r.all = append(r.all, cr)
 		for _, p := range cr.ps {
@@ -109,11 +118,16 @@ func (r *run) clientEvidence() {
 	}
 	r.step(0, "C", "Клиенты: Hiddify, v2rayN", "ok", "найдено: "+strings.Join(found, ", ")+"; проверяется "+r.active.a.Title())
 	st := r.active.state
+	proc := yesno(st.Running, "запущен", "не запущен")
+	if !r.facts.Collected && !st.Running {
+		proc = "неизвестно (нет фактов Windows)"
+	}
 	r.put(evidence.Evidence{ID: "C8", Source: evidence.FromOS, Reliability: evidence.High, Facts: map[string]any{
 		"client_running": st.Running, "core_listening": st.CoreListening, "tun_adapter": st.TunAdapter, "service": st.Service,
 		"proxy_port": r.active.d.ProxyPort},
-		Summary: fmt.Sprintf("%s: процесс %s, локальный прокси :%d %s%s", r.active.a.Title(), yesno(st.Running, "запущен", "не запущен"),
-			r.active.d.ProxyPort, yesno(st.CoreListening, "слушает", "не слушает"), yesno(st.TunAdapter, ", адаптер TUN есть", ""))})
+		Summary: fmt.Sprintf("%s: %s (локальный прокси :%d %s), процесс %s%s", r.active.a.Title(),
+			yesno(st.CoreListening || st.TunAdapter, "подключён", "не подключён"), r.active.d.ProxyPort, yesno(st.CoreListening, "слушает", "не слушает"),
+			proc, yesno(st.TunAdapter, ", адаптер TUN есть", ""))})
 	var exposed []string
 	for _, cr := range r.all {
 		for _, p := range cr.state.Exposed {

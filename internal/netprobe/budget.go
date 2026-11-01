@@ -8,6 +8,7 @@ package netprobe
 
 import (
 	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -35,7 +36,8 @@ type Usage struct {
 	Refused  int `json:"refused"`
 }
 
-// Budget потокобезопасен; один на процесс (окно переживает сессии).
+// Budget потокобезопасен; один на сервер (адрес+порт) на всё время жизни процесса: окно
+// переживает сеансы, а пробы к другому серверу его не расходуют.
 type Budget struct {
 	TLSMax    int
 	TLSWindow time.Duration
@@ -140,15 +142,28 @@ func (b *Budget) Upgrade() error {
 }
 
 // WaitTLS — через сколько освободится слот TLS (0 — свободен).
-func (b *Budget) WaitTLS() time.Duration {
+func (b *Budget) WaitTLS() time.Duration { return b.Wait(TLS) }
+
+// Wait — через сколько можно будет открыть соединение вида k (0 — сейчас): TLS-хендшейк
+// тратит и слот TCP.
+func (b *Budget) Wait(k Kind) time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
 	b.prune(now)
-	if len(b.tls) < b.TLSMax {
-		return 0
+	var w time.Duration
+	if len(b.tcp) >= b.TCPMax {
+		w = b.tcp[len(b.tcp)-b.TCPMax].Add(b.TCPWindow).Sub(now)
 	}
-	return b.tls[0].Add(b.TLSWindow).Sub(now)
+	if k == TLS && len(b.tls) >= b.TLSMax {
+		if t := b.tls[len(b.tls)-b.TLSMax].Add(b.TLSWindow).Sub(now); t > w {
+			w = t
+		}
+	}
+	if w < 0 {
+		w = 0
+	}
+	return w
 }
 
 // Usage — текущий расход.
@@ -162,8 +177,16 @@ func (b *Budget) usageLocked(now time.Time) Usage {
 	b.prune(now)
 	u := Usage{TLS: len(b.tls), TLSMax: b.TLSMax, TCP: len(b.tcp), TCPMax: b.TCPMax, TotalTLS: b.totTLS, TotalTCP: b.totTCP, Refused: b.refused}
 	if len(b.tls) >= b.TLSMax {
-		u.WaitSec = int(b.tls[0].Add(b.TLSWindow).Sub(now).Seconds()) + 1
+		u.WaitSec = int(b.tls[len(b.tls)-b.TLSMax].Add(b.TLSWindow).Sub(now).Seconds()) + 1
 	}
+	return u
+}
+
+// Since — расход за сеанс: накопленные счётчики минус снимок на его начало.
+func (u Usage) Since(start Usage) Usage {
+	u.TotalTLS -= start.TotalTLS
+	u.TotalTCP -= start.TotalTCP
+	u.Refused -= start.Refused
 	return u
 }
 
@@ -180,11 +203,31 @@ func (b *Budget) Snapshot() Snapshot {
 	return Snapshot{TLS: append([]time.Time(nil), b.tls...), TCP: append([]time.Time(nil), b.tcp...)}
 }
 
-// Restore добавляет сохранённые отметки (старые отбрасываются окном).
+// Restore добавляет сохранённые отметки (старые отбрасываются окном). Отметки, которые уже
+// есть, не дублируются: иначе повторный Restore того же снимка в долгоживущем окне удваивал
+// счётчик и следующий сеанс получал «бюджет исчерпан» без единой пробы.
 func (b *Budget) Restore(s Snapshot) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.tls = append(b.tls, s.TLS...)
-	b.tcp = append(b.tcp, s.TCP...)
+	b.tls = mergeMarks(b.tls, s.TLS)
+	b.tcp = mergeMarks(b.tcp, s.TCP)
 	b.prune(b.now())
+}
+
+func mergeMarks(have, add []time.Time) []time.Time {
+	out := append([]time.Time(nil), have...)
+	for _, t := range add {
+		dup := false
+		for _, h := range have {
+			if h.Equal(t) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out
 }

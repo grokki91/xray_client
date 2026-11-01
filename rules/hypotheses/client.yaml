@@ -7,7 +7,7 @@
     - ["C6.port_busy>=1"]
   possible:
     - ["C8.client_running=true", "C8.core_listening=false"]
-  excluded: ["S3.own=true", "C8.core_listening=true"]
+  excluded: ["S3.own=true", "C8.core_listening=true", "C10.outcome=ok"]
   title: "{CX.client_name}: ядро или служба не запустились — попытки подключения нет"
   why: "В логах клиента — ошибка запуска ядра или занятый порт; к серверу в этом случае не уходит ничего, а приложение показывает «Подключение…» или «таймаут»."
   alternative: "Если клиент просто выключен (не нажато «Подключить») — это не сбой; повторить диагностику при включённом клиенте."
@@ -22,7 +22,7 @@
     - ["C6.tun_error>=1"]
   possible:
     - ["CX.tun=true", "C8.tun_adapter=false", "C8.client_running=true"]
-  excluded: ["S3.own=true"]
+  excluded: ["S3.own=true", "C10.outcome=ok"]
   title: "{CX.client_name}: режим TUN не поднялся"
   why: "Клиент в режиме VPN (TUN), но сетевого адаптера TUN нет или в логе ошибка его настройки (нужны права администратора, мешает другой VPN)."
   actions:
@@ -42,6 +42,7 @@
 
 - code: client.core.mlkem
   confirmed:
+    - ["CX.core_mlkem=false", "C10.outcome=fail", "P3.outcome=ok", "P3m.outcome=real_cert"]
     - ["CX.core_mlkem=false", "P3.outcome=ok", "P3m.outcome=real_cert"]
     - ["S3.rd_r=mlkem", "S3.ssh=true"]
     - ["S3.code=client.core", "S3.live=true", "S3.ssh=true"]
@@ -53,7 +54,7 @@
     - ["S3.code=client.core"]
   possible:
     - ["CX.core_mlkem=false"]
-  excluded: ["S1.mlkem_rule=false", "P3m.outcome=ok", "S3.rd_r=ok"]
+  excluded: ["S1.mlkem_rule=false", "P3m.outcome=ok", "S3.rd_r=ok", "C10.outcome=ok"]
   title: "{CX.client_name}: ядро {CX.core} не шлёт X25519MLKEM768 — сервер отдаёт его ClientHello сайту-маске"
   why: "REALITY на сервере с Xray v26.9.9 принимает только ClientHello, где X25519MLKEM768 идёт перед X25519. Ядро {CX.core} эту долю вырезает: сервер молча отдаёт соединение сайту-маске, клиент получает настоящий сертификат маски и пишет «таймаут». Эталонное ядро Xray с тем же профилем при этом подключается."
   alternative: "Если сервер на Xray старше v26.9.9 — правила нет, и причина в другом: тогда эталон без X25519MLKEM768 тоже прошёл бы (проверка P3m)."
@@ -62,6 +63,22 @@
     - "Профиль в новый клиент: `sudo xm uri <имя>` или `sudo xm qr <имя>`"
     - "Hiddify ждать с исправлением (ветка v5) — в релизе 4.x его нет"
   next_checks: [S1, S3]
+
+# C10 — запрос через локальный прокси клиента: клиент запущен и «подключается», а трафик не идёт,
+# хотя эталон с тем же профилем подключился. Частные объяснения (ядро без X25519MLKEM768, fp) —
+# выше по порядку; эта гипотеза — когда они исключены.
+- code: client.tunnel
+  confirmed:
+    - ["C10.outcome=fail|freeze", "P3.outcome=ok"]
+  excluded: ["P3m.outcome=real_cert", "C10.outcome=ok"]
+  title: "{CX.client_name} запущен, но трафик через него не идёт — а эталон с тем же профилем подключается"
+  why: "Запрос через локальный прокси клиента не прошёл, а эталонное ядро Xray с тем же профилем подняло тоннель к тому же серверу. Сервер, путь до него и профиль исправны: сбой в самом клиенте — его ядре, настройках или выбранном сервере."
+  alternative: "Если в клиенте сейчас выбран другой сервер подписки, чем проверенный профиль, — проверьте выбор сервера в клиенте."
+  actions:
+    - "В клиенте: «Отключить» → «Подключить»; не помогло — закрыть клиент полностью (в трее тоже) и запустить снова"
+    - "Проверить, что в клиенте выбран именно этот сервер"
+    - "Обновить клиент или сменить его на ядро Xray: {COMPAT.recommend}"
+  next_checks: [C6, C7]
 
 - code: client.core.old
   confirmed:
@@ -80,7 +97,7 @@
     - ["CX.core_mlkem=true", "CX.fp_mlkem=false", "P3.outcome=ok"]
   possible:
     - ["CX.core_mlkem=true", "CX.fp_mlkem=false"]
-  excluded: ["S1.mlkem_rule=false", "P3m.outcome=ok"]
+  excluded: ["S1.mlkem_rule=false", "P3m.outcome=ok", "C10.outcome=ok"]
   title: "Профиль: отпечаток fp={CX.fp} без X25519MLKEM768 — сервер его не пускает"
   why: "Ядро клиента умеет X25519MLKEM768, но выбранный пресет отпечатка его не шлёт (или пресет пуст). REALITY ≥ v26.9.9 отдаёт такой ClientHello сайту-маске."
   actions:

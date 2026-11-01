@@ -1,17 +1,26 @@
 package osw
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 // psScript — сбор фактов одним проходом. Каждый раздел в своём try: отсутствующий командлет
 // не роняет остальное. Пути exe клиентов — в переменной окружения XDIAG_EXE (через |), не в
 // командной строке. Вывод — один JSON в UTF-8.
+//
+// Скрипт передаётся через -EncodedCommand (EncodedCommand), а не через stdin (-Command -):
+// из stdin PowerShell 5.1 читает построчно, как консоль, и многострочный блок (try { … } на
+// нескольких строках) ждёт пустой строки — всё после него, включая ConvertTo-Json, не
+// выполняется, вывод пуст («unexpected end of JSON input»).
 const psScript = `
 $ErrorActionPreference = 'SilentlyContinue'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ProgressPreference = 'SilentlyContinue'
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}
 $r = [ordered]@{}
 try { $r.adapters = @(Get-NetAdapter | Select-Object Name, InterfaceDescription, ifIndex, Status) } catch {}
 try { $r.ipif = @(Get-NetIPInterface -AddressFamily IPv4 | Select-Object ifIndex, NlMtu, InterfaceMetric, ConnectionState) } catch {}
@@ -22,14 +31,14 @@ try { $r.smhnr = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT
 try { $r.nrpt = @(Get-DnsClientNrptRule).Count } catch {}
 try { $r.fw = @(Get-NetFirewallProfile | Select-Object Name, Enabled) } catch {}
 try {
-  $r.fwblock = @(Get-NetFirewallRule -Enabled True -Action Block | Get-NetFirewallApplicationFilter |
-    Where-Object { $_.Program -match '(?i)hiddify|v2rayn|xray|sing-box|mihomo' } |
-    ForEach-Object { Split-Path $_.Program -Leaf })
+  $r.fwblock = @(Get-NetFirewallApplicationFilter -All | Where-Object { $_.Program -match '(?i)hiddify|v2rayn|xray|sing-box|mihomo' } |
+    ForEach-Object { $f = $_; $f | Get-NetFirewallRule | Where-Object { [string]$_.Enabled -eq 'True' -and [string]$_.Action -eq 'Block' } |
+      ForEach-Object { Split-Path $f.Program -Leaf } })
 } catch {}
 try { $r.av = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct | Select-Object displayName, productState) } catch {}
 try { $p = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'; $r.proxy = [ordered]@{ enable = $p.ProxyEnable; server = $p.ProxyServer; pac = $p.AutoConfigURL } } catch {}
-try { $r.winhttp = (& netsh.exe winhttp show proxy) -join "\n" } catch {}
-try { $r.w32tm = (& w32tm.exe /query /status) -join "\n" } catch {}
+try { $r.winhttp = (& netsh.exe winhttp show proxy) -join [char]10 } catch {}
+try { $r.w32tm = (& w32tm.exe /query /status) -join [char]10 } catch {}
 try { $r.v6 = @(Get-NetIPAddress -AddressFamily IPv6 | Where-Object { $_.PrefixOrigin -in 'RouterAdvertisement','Dhcp','Manual' -and $_.IPAddress -notlike 'fe80*' -and $_.AddressState -eq 'Preferred' }).Count } catch {}
 try { $r.listen = @(Get-NetTCPConnection -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess) } catch {}
 try {
@@ -42,6 +51,18 @@ foreach ($x in ($env:XDIAG_EXE -split '\|')) { if ($x -and (Test-Path -LiteralPa
 $r.vers = $vers
 $r | ConvertTo-Json -Depth 4 -Compress
 `
+
+// EncodedCommand — скрипт для powershell.exe -EncodedCommand: base64 от UTF-16LE. Длина для
+// psScript — около 9 КБ при пределе командной строки 32 КБ; секретов в скрипте нет (пути exe —
+// в переменной окружения).
+func EncodedCommand(script string) string {
+	u := utf16.Encode([]rune(script))
+	b := make([]byte, 2*len(u))
+	for i, c := range u {
+		b[2*i], b[2*i+1] = byte(c), byte(c>>8)
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
 
 type psOut struct {
 	Adapters json.RawMessage `json:"adapters"`
@@ -73,6 +94,9 @@ type FileVersions map[string]string
 
 // parsePS разбирает вывод скрипта.
 func parsePS(b []byte) (Facts, FileVersions, error) {
+	if strings.TrimSpace(string(b)) == "" {
+		return Facts{}, nil, errors.New("PowerShell не вернул данных")
+	}
 	var o psOut
 	if err := json.Unmarshal(b, &o); err != nil {
 		return Facts{}, nil, err

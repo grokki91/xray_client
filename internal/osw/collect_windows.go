@@ -18,14 +18,17 @@ import (
 var lastVersions FileVersions
 
 func collect(ctx context.Context, clientPaths []string) Facts {
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-")
-	cmd.Stdin = strings.NewReader(psScript)
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+		"-EncodedCommand", EncodedCommand(psScript))
 	cmd.Env = append(os.Environ(), "XDIAG_EXE="+strings.Join(clientPaths, "|"))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	out, err := cmd.Output()
 	if err != nil && len(out) == 0 {
+		if ctx.Err() != nil {
+			return Facts{Err: "PowerShell не уложился в 30 с"}
+		}
 		return Facts{Err: "PowerShell: " + err.Error()}
 	}
 	// Перед JSON PowerShell иногда печатает прогресс — берём с первой «{».
