@@ -1,6 +1,11 @@
 package osw
 
-import "testing"
+import (
+	"encoding/base64"
+	"strings"
+	"testing"
+	"unicode/utf16"
+)
 
 // Вывод скрипта PowerShell (ConvertTo-Json): одиночные элементы — объектом, а не массивом.
 const sample = `{"adapters":[{"Name":"Ethernet","InterfaceDescription":"Intel(R) Ethernet Controller I225-V","ifIndex":12,"Status":"Up"},
@@ -36,5 +41,35 @@ func TestParsePS(t *testing.T) {
 	}
 	if !f.TimeSynced || len(f.Listening) != 1 || len(f.ProcessByName("hiddify")) != 1 || f.Services["HiddifyTunnelService"] != "Running" {
 		t.Fatalf("прочее: %+v", f)
+	}
+}
+
+// Скрипт уходит в -EncodedCommand целиком: base64 от UTF-16LE, обратимо, в пределах командной
+// строки Windows (32767 символов). Через stdin (-Command -) многострочные блоки PowerShell 5.1
+// не выполнял — вывод был пуст.
+func TestEncodedCommand(t *testing.T) {
+	enc := EncodedCommand(psScript)
+	if len(enc) > 30000 {
+		t.Fatalf("длина %d", len(enc))
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil || len(raw)%2 != 0 {
+		t.Fatal(err)
+	}
+	u := make([]uint16, len(raw)/2)
+	for i := range u {
+		u[i] = uint16(raw[2*i]) | uint16(raw[2*i+1])<<8
+	}
+	if string(utf16.Decode(u)) != psScript {
+		t.Fatal("скрипт не восстановился")
+	}
+	if !strings.Contains(psScript, "ConvertTo-Json") || strings.Contains(psScript, `-join "\n"`) {
+		t.Fatal("скрипт")
+	}
+}
+
+func TestParsePSEmpty(t *testing.T) {
+	if _, _, err := parsePS([]byte(" \r\n")); err == nil || !strings.Contains(err.Error(), "не вернул") {
+		t.Fatalf("%v", err)
 	}
 }
