@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/grokki91/xray_client/internal/netprobe"
 	"github.com/grokki91/xray_client/internal/osw"
 	"github.com/grokki91/xray_client/internal/refcore"
+	"github.com/grokki91/xray_client/internal/rules"
 )
 
 // phase1 — интернет, DNS провайдера, настоящий адрес маски. К серверу — ничего.
@@ -103,9 +105,60 @@ func (r *run) phase1(ctx context.Context) {
 		r.put(evidence.Evidence{ID: "N4", Source: evidence.FromNetwork, Reliability: evidence.Medium,
 			Facts: map[string]any{"ok": false, "stage": "dns"}, Summary: "Сайт-маска: " + maskErr})
 	}
+	if mask != nil && helloSilent(mask.Outcome) && okN > 0 && ctx.Err() == nil {
+		r.sniElsewhere(ctx, h, results)
+	}
 	if okN > 0 && ctx.Err() == nil {
 		r.clientTunnel(ctx)
 	}
+}
+
+// sniElsewhere — N5: маска по своему адресу молчит после ClientHello — режут её SNI или её
+// адрес. Тот же SNI — на адрес эталона, который только что открылся. Ответ есть — SNI не
+// режется (REALITY на адрес сервера это не затрагивает); тишина — режут по SNI, и REALITY с
+// этой маской в этой сети не пройдёт. К серверу — ничего.
+func (r *run) sniElsewhere(ctx context.Context, h *rules.Hosts, results []netprobe.HTTPResult) {
+	const title = "SNI маски на чужом адресе"
+	var ref *url.URL
+	for _, foreign := range []bool{true, false} {
+		for i, x := range results {
+			u, err := url.Parse(h.Internet[i].URL)
+			if ref != nil || !x.OK || err != nil || u.Scheme != "https" || (x.Region != "ru") != foreign ||
+				strings.EqualFold(u.Hostname(), r.prof.SNI) {
+				continue
+			}
+			ref = u
+		}
+	}
+	if ref == nil {
+		return
+	}
+	port := ref.Port()
+	if port == "" {
+		port = "443"
+	}
+	r.step(1, "N5", title, "run", "")
+	ips, err := netprobe.LookupHost(ctx, r.res, ref.Hostname())
+	if err != nil {
+		r.step(1, "N5", title, "skip", "адрес эталона не резолвится")
+		return
+	}
+	t := netprobe.ProbeTLS(ctx, r.dial, nil, net.JoinHostPort(ips[0].String(), port), r.prof.SNI, 8*time.Second)
+	if strings.HasPrefix(t.Outcome, "tcp_") {
+		r.step(1, "N5", title, "skip", tlsText(t.Outcome, false))
+		return
+	}
+	passed := !helloSilent(t.Outcome)
+	r.put(evidence.Evidence{ID: "N5", Source: evidence.FromNetwork, Reliability: evidence.High,
+		Facts: map[string]any{"passed": passed, "stage": t.Outcome},
+		Summary: yesno(passed, "SNI маски на чужом адресе проходит: режут адрес маски, а не SNI",
+			"SNI маски и на чужом адресе без ответа ("+tlsText(t.Outcome, false)+"): режут по SNI")})
+	r.step(1, "N5", title, yesno(passed, "ok", "warn"), yesno(passed, "проходит — SNI не режется", "без ответа — режут по SNI"))
+}
+
+// helloSilent — после ClientHello ни байта ответа: тишина, сброс или закрытие.
+func helloSilent(o string) bool {
+	return o == "hello_timeout" || o == "reset_after_hello" || o == "eof_after_hello"
 }
 
 // phase2 — сервер снаружи, в бюджете этого сервера. Порядок экономит соединения: TCP (P1) →
@@ -160,6 +213,9 @@ func (r *run) phase2(ctx context.Context) {
 	}
 	if p1.Outcome != "ok" {
 		r.step(2, "P3", refTitle, "skip", "не выполнялось: TCP до сервера не установился")
+		if p1.Outcome == "timeout" || p1.Outcome == "unreachable" {
+			r.sshPort(ctx, ip)
+		}
 		r.repeat(ctx, addr)
 		return
 	}
@@ -186,6 +242,48 @@ func (r *run) phase2(ctx context.Context) {
 }
 
 const refTitle = "Эталонное ядро Xray с профилем (fp chrome)"
+
+// sshPort — P6: порт сервера молчит — отвечает ли SSH-порт того же адреса. Отвечает — адрес не
+// заблокирован целиком, молчит только порт сервера (файрвол сервера или хостера, порт в
+// профиле, фильтр по порту). Порт SSH — из алиаса настроек (`ssh -G`, без подключения), иначе
+// 22; в улики он не пишется. Одно TCP в бюджете сервера, без пауз ради него.
+func (r *run) sshPort(ctx context.Context, ip net.IP) {
+	const title = "SSH-порт того же адреса"
+	port, known := 22, false
+	if r.o.SSHAlias != "" && r.e.SSHPort != nil {
+		if p := r.e.SSHPort(ctx, r.o.SSHAlias); p > 0 {
+			port, known = p, true
+		}
+	}
+	if port == r.prof.Port || ctx.Err() != nil {
+		return
+	}
+	if !r.budget.Can(netprobe.TCP) {
+		r.step(2, "P6", title, "skip", tcpText(netprobe.TCPResult{Outcome: "budget"}))
+		return
+	}
+	r.step(2, "P6", title, "run", "")
+	t, banner := netprobe.ProbeBanner(ctx, r.dial, r.budget, net.JoinHostPort(ip.String(), strconv.Itoa(port)), "SSH-", 3*time.Second)
+	reach := t.Outcome == "ok" || t.Outcome == "refused"
+	what := yesno(known || port != 22, "SSH-порт", "Порт 22")
+	var sum, note string
+	switch {
+	case t.Outcome == "ok" && banner:
+		sum, note = what+" того же адреса открыт (ответ SSH): адрес доступен, молчит только порт сервера", "открыт — адрес доступен"
+	case t.Outcome == "ok":
+		sum, note = what+" того же адреса: соединение есть, ответа SSH нет — адрес доступен", "соединение есть — адрес доступен"
+	case t.Outcome == "refused":
+		sum, note = what+" того же адреса: отказ (RST) — адрес отвечает", "отказ (RST) — адрес отвечает"
+	case known:
+		sum, note = what+" того же адреса: "+tcpText(t)+" — молчит весь адрес", tcpText(t)
+	default:
+		sum, note = what+" того же адреса: "+tcpText(t)+" (свой порт SSH — из алиаса в «Настройках»)", tcpText(t)
+	}
+	r.put(evidence.Evidence{ID: "P6", Source: evidence.FromNetwork, Reliability: evidence.High,
+		Facts:   map[string]any{"outcome": t.Outcome, "ms": t.Ms, "reach": reach, "banner": banner, "known": known},
+		Summary: sum})
+	r.step(2, "P6", title, yesno(reach, "ok", "warn"), note)
+}
 
 // repeat — P4: один повтор через 30 с, если первая попытка не прошла (снимает единичную потерю).
 func (r *run) repeat(ctx context.Context, addr string) {

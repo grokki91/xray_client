@@ -25,9 +25,11 @@
   likely:
     - ["P1.outcome=timeout", "P4.tcp=timeout"]
     - ["P1.outcome=timeout", "S0.ssh=unreachable"]
+    - ["P1.outcome=timeout", "P6.reach=false", "P6.known=true"]
   possible:
     - ["P1.outcome=timeout|unreachable"]
-  excluded: ["P1.outcome=ok", "S3.own=true", "N2.foreign_ok=false", "C10.outcome=ok"]
+  # SSH того же адреса отвечает — адрес доступен: это server.port.drop / path.port.
+  excluded: ["P1.outcome=ok", "S3.own=true", "N2.foreign_ok=false", "C10.outcome=ok", "P6.reach=true", "S0.ssh=ok"]
   title: "Адрес сервера недоступен: TCP до порта сервера не устанавливается"
   why: "Интернет есть (эталонные сайты открываются), а TCP-соединение с портом сервера не устанавливается ни с первой попытки, ни с повтора через 30 секунд."
   alternative: "Это похоже на блокировку адреса по пути, но то же даёт бан IP хостера, белый список мобильной сети или файрвол роутера. Различить — повтором из другой сети."
@@ -37,6 +39,23 @@
     - "Перед повтором подождать 2 минуты: частые попытки сами похожи на шторм"
   next_checks: [P5, S3]
 
+# Порт сервера молчит, а SSH того же адреса отвечает — и из другой сети порт открыт или сервер не
+# видит SYN из этой: сеть режет именно порт. Без этого — server.port.drop (сначала сервер).
+- code: path.port
+  gate: ["N1.ok=true"]
+  confirmed:
+    - ["P1.outcome=timeout", "P6.reach=true", "P5.p1=ok"]
+    - ["P1.outcome=timeout", "S0.ssh=ok", "P5.p1=ok"]
+    - ["P1.outcome=timeout", "P6.reach=true", "S3.code=net.nosyn", "C7.syn_seen=true"]
+    - ["S3.code=net.synack", "S3.ssh=true", "P6.reach=true"]
+  excluded: ["P1.outcome=ok", "C10.outcome=ok"]
+  title: "Сеть режет порт сервера: SSH того же адреса проходит"
+  why: "SSH того же адреса из этой сети проходит, а порт сервера — нет, хотя из другой сети он открывается (или сервер не видит SYN из этой). Режут именно порт."
+  actions:
+    - "Перенести сервер на другой порт (443 — привычнее для TLS) и обновить профиль"
+    - "До переноса — подключаться из другой сети"
+  next_checks: [S3]
+
 - code: path.hello
   gate: ["N1.ok=true"]
   confirmed:
@@ -45,6 +64,7 @@
     - ["S3.code=net.hello", "S3.ssh=true"]
   likely:
     - ["P1.outcome=ok", "P2.outcome=hello_timeout|reset_after_hello|eof_after_hello", "N4.ok=true", "P4.tls=hello_timeout|reset_after_hello|eof_after_hello|tcp_timeout"]
+    - ["P1.outcome=ok", "P2.outcome=hello_timeout|reset_after_hello|eof_after_hello", "N5.passed=false"]
   possible:
     - ["P1.outcome=ok", "P2.outcome=hello_timeout|reset_after_hello|eof_after_hello"]
   excluded: ["P2.outcome=mask_cert", "S3.stage=hello", "P3.outcome=ok", "C10.outcome=ok"]
@@ -105,3 +125,17 @@
   title: "Много TLS-соединений к серверу за минуту — риск «заморозки по отпечатку»"
   why: "Захват показал больше трёх TLS-хендшейков клиента к серверу за минуту. По отчётам (2026-05…06) это приводит к заморозке на 2–10 минут."
   actions: ["Не жать «Подключить» многократно; подождать 2–3 минуты", "XHTTP с xmux по умолчанию держит до трёх соединений — не трогать без замера"]
+
+# N4 молчит после ClientHello, а N5 (тот же SNI на адрес эталона) тоже: режут по SNI. Находка —
+# не причина «таймаута», пока TCP до сервера нет, но после починки порта REALITY с этой маской
+# всё равно не пройдёт.
+- code: path.sni
+  kind: finding
+  gate: ["N1.ok=true"]
+  likely:
+    - ["N4.stage=hello_timeout|reset_after_hello|eof_after_hello", "N5.passed=false"]
+  excluded: ["N5.passed=true", "P2.outcome=mask_cert", "P3.outcome=ok|real_cert|freeze", "C10.outcome=ok"]
+  title: "SNI маски режется в этой сети: с этой маской REALITY не пройдёт"
+  why: "ClientHello с SNI маски остаётся без ответа и на адресе маски, и на адресе эталона, который без этого SNI открывается."
+  alternative: "Реже так выглядит сбой узла по пути; подтвердить — из другой сети."
+  actions: ["Сменить маску: `sudo xm sni-scan`"]

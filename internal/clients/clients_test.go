@@ -153,4 +153,11 @@ func TestScanTextPasted(t *testing.T) {
 	if !s.Pasted || s.Counts["real_cert"] != 1 || s.Counts["port_busy"] != 1 || len(s.Lines) != 2 {
 		t.Fatalf("%+v", s)
 	}
+	// Прямые проверки Hiddify — отдельно от таймаутов к серверу.
+	s = ScanText("WARN monitoring: outbound direct §hide§ URL test failed: (dial tcp 192.0.2.1:80: i/o timeout)\n" +
+		"WARN monitoring: outbound direct-fragment §hide§ URL test failed: (dial tcp 192.0.2.1:80: i/o timeout)\n" +
+		"ERROR outbound/vless[proxy]: dial tcp 198.51.100.7:443: i/o timeout")
+	if s.Counts["direct_failed"] != 2 || s.Counts["timeout"] != 3 {
+		t.Fatalf("%+v", s.Counts)
+	}
 }

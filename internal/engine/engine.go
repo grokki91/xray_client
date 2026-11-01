@@ -47,7 +47,7 @@ type Options struct {
 	OtherNetwork bool         // повтор «из другой сети» (P5) — сравнение с Prev
 	Prev         *SessionData // предыдущий сеанс для P5
 	Bridge       string       // "" | "ssh"
-	SSHAlias     string       // алиас из ~/.ssh/config
+	SSHAlias     string       // алиас из ~/.ssh/config: мост (Bridge=ssh) и порт SSH для P6
 	LiveSeconds  int          // окно xm doctor
 	Imports      []Import     // файлы xm (ручной мост)
 	PastedLogs   string       // экспорт логов клиента
@@ -107,6 +107,8 @@ type Engine struct {
 	LocalOpen func(port int) bool
 	// ProbeClient — C10: запрос через локальный прокси клиента (port 0 — по системному маршруту).
 	ProbeClient func(ctx context.Context, port int, probe204, download string, limit int) netprobe.ClientResult
+	// SSHPort — порт SSH алиаса (`ssh -G`, без подключения); 0 — не узнать, P6 берёт 22.
+	SSHPort func(ctx context.Context, alias string) int
 
 	mu      sync.Mutex
 	running bool
@@ -152,6 +154,13 @@ func New(st *store.Store) (*Engine, error) {
 		LocalOpen: netprobe.LocalListening, ProbeClient: netprobe.ProbeViaClient}
 	e.NewEnv = func(f *osw.Facts) *clients.Env { return clients.DefaultEnv(f, re.Compat) }
 	e.NewSSH = func(alias string) (SSHBridge, error) { return bridge.NewSSH(alias) }
+	e.SSHPort = func(ctx context.Context, alias string) int {
+		s, err := bridge.NewSSH(alias)
+		if err != nil {
+			return 0
+		}
+		return s.Port(ctx)
+	}
 	return e, nil
 }
 

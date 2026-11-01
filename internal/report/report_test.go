@@ -98,3 +98,37 @@ func TestMaskAddress(t *testing.T) {
 		}
 	}
 }
+
+// Скрин 5: порт молчит, SSH того же адреса открыт — звено «Сервер» так и подписано, причина —
+// на сервере, а Hiddify без X25519MLKEM768 (возможно) — в «Также найдено»: всплывёт после порта.
+func TestPortSilentSSHOpen(t *testing.T) {
+	e, _ := rules.Load()
+	set := evidence.FromList([]evidence.Evidence{
+		{ID: "N1", Facts: map[string]any{"ok": true, "hosts_ok": 2.0, "hosts": 4.0}, Summary: "Эталонные сайты: 2 из 4"},
+		{ID: "CX", Facts: map[string]any{"client": "hiddify", "client_name": "Hiddify 4.1.1", "core": "hiddify-sing-box", "core_mlkem": false}},
+		{ID: "C3", Facts: map[string]any{"found": true}},
+		{ID: "C10", Facts: map[string]any{"listening": true, "outcome": "fail", "error": "eof"}},
+		{ID: "P1", Facts: map[string]any{"outcome": "timeout"}, Summary: "TCP до порта сервера: таймаут"},
+		{ID: "P6", Facts: map[string]any{"outcome": "ok", "reach": true, "banner": true, "known": false}, Summary: "SSH-порт того же адреса открыт"},
+		{ID: "P4", Facts: map[string]any{"tcp": "timeout"}, Summary: "Повтор: TCP — таймаут"},
+	})
+	s := &engine.SessionData{ID: "20261101-195000-abcd", Started: time.Now(), Client: "hiddify", ClientName: "Hiddify 4.1.1",
+		Evidence: set.All(), Verdict: e.Decide(set)}
+	v := Build(s)
+	if v.Code != "server.port.drop" || v.Status.Head != "Не работает: причина на сервере" {
+		t.Fatalf("итог %s: %+v", v.Code, v.Status)
+	}
+	if srv := v.Stages[1]; srv.State != "fail" || srv.Note != "порт молчит, SSH отвечает" {
+		t.Fatalf("звено «Сервер»: %+v", srv)
+	}
+	if len(v.Also) != 1 || !strings.Contains(v.Also[0], "X25519MLKEM768") || !strings.HasSuffix(v.Also[0], "(возможно)") {
+		t.Fatalf("также найдено: %v", v.Also)
+	}
+	var ids []string
+	for _, l := range v.Evidence {
+		ids = append(ids, l.ID)
+	}
+	if !strings.Contains(strings.Join(ids, ","), "P6") {
+		t.Fatalf("P6 не в уликах: %v", ids)
+	}
+}

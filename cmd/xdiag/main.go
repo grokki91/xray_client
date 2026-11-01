@@ -147,7 +147,7 @@ func cmdRun(args []string) error {
 	}
 	o := engine.Options{Client: set.Client, ProfileURI: vault.ProfileURI, HiddifyDir: vault.HiddifyDir, V2rayNDir: vault.V2rayNDir,
 		Offline: *offline, Reference: set.Reference && !*noRef, LiveSeconds: set.LiveSeconds, Capture: *capt, CaptureSecs: *captSecs,
-		OtherNetwork: *other}
+		OtherNetwork: *other, SSHAlias: vault.SSHAlias} // алиас без моста — только порт SSH для P6
 	if *client != "" {
 		o.Client = *client
 	}
@@ -159,7 +159,7 @@ func cmdRun(args []string) error {
 		o.LiveSeconds = *live
 	}
 	if *ssh != "" || *useBridge || set.UseBridge {
-		o.Bridge, o.SSHAlias = "ssh", vault.SSHAlias
+		o.Bridge = "ssh"
 		if *ssh != "" {
 			o.SSHAlias = *ssh
 		}

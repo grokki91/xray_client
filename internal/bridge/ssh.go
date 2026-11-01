@@ -144,6 +144,35 @@ func (s *SSH) Health(ctx context.Context) (*Health, error) {
 	return ParseHealth(out)
 }
 
+// Port — порт SSH алиаса по `ssh -G`: ssh.exe печатает итоговый конфиг, к серверу не
+// подключаясь. 0 — узнать не удалось.
+func (s *SSH) Port(ctx context.Context) int {
+	if !reAlias.MatchString(s.Alias) {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, _, err := s.Run(ctx, s.Exe, []string{"-G", "--", s.Alias}, nil)
+	if err != nil {
+		return 0
+	}
+	return ParsePort(out)
+}
+
+// ParsePort — значение строки «port N» из вывода `ssh -G`.
+func ParsePort(out []byte) int {
+	for _, l := range strings.Split(string(out), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(l), " ")
+		if !ok || !strings.EqualFold(k, "port") {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 && n < 65536 {
+			return n
+		}
+	}
+	return 0
+}
+
 // ManualCommands — что выполнить на сервере в ручном режиме (без SSH из приложения).
 func ManualCommands(live int) []string {
 	if live <= 0 {

@@ -82,3 +82,27 @@
   title: "Сервер: SYN доходит, но сервер не отвечает"
   why: "Окно `xm doctor`: попытка из сети этого ПК пришла, SYN-ACK не ушёл."
   actions: ["`sudo ufw status verbose`", "`sudo ss -tlnp`"]
+
+# Порт сервера молчит (SYN без ответа и через 30 с), а SSH того же адреса отвечает (P6 или мост):
+# адрес не заблокирован целиком. Чаще причина на сервере — её проверить быстрее, SSH есть.
+- code: server.port.drop
+  gate: ["N1.ok=true"]
+  confirmed:
+    - ["P1.outcome=timeout", "P6.reach=true", "P5.p1=timeout|unreachable"]
+    - ["P1.outcome=timeout", "S0.ssh=ok", "P5.p1=timeout|unreachable"]
+  likely:
+    - ["P1.outcome=timeout", "P4.tcp=timeout", "P6.reach=true"]
+    - ["P1.outcome=timeout", "P4.tcp=timeout", "S0.ssh=ok"]
+  possible:
+    - ["P1.outcome=timeout", "P6.reach=true"]
+    - ["P1.outcome=timeout", "S0.ssh=ok"]
+  excluded: ["P1.outcome=ok", "C10.outcome=ok", "P5.p1=ok", "S3.code=net.nosyn"]
+  title: "Порт сервера молчит, а SSH того же адреса отвечает"
+  why: "Адрес не заблокирован: SSH открыт, а SYN к порту сервера остаётся без ответа. Так бывает, когда порт закрыт файрволом сервера или хостера, Xray слушает другой порт или в профиле старый порт."
+  alternative: "То же даёт фильтр провайдера по порту. Различить — окном сервера (доходят ли SYN) или из другой сети."
+  actions:
+    - "На сервере: `sudo ss -tlnp | grep xray` — слушает ли Xray порт профиля"
+    - "`sudo ufw status` и файрвол в панели хостера — открыт ли этот порт"
+    - "Порт в профиле сверить с сервером: `sudo xm uri <имя>`"
+    - "На сервере всё открыто — режет сеть: проверить из другой сети"
+  next_checks: [S3, P5]

@@ -117,6 +117,8 @@ var logPatterns = []struct {
 	{"real_cert", regexp.MustCompile(`(?i)received real certificate`)},
 	{"invalid_conn", regexp.MustCompile(`(?i)processed invalid connection`)},
 	{"timeout", regexp.MustCompile(`(?i)i/o timeout|context deadline exceeded|handshake timeout|timed out`)},
+	// Hiddify сам проверяет прямой выход (outbound direct/direct-fragment): это не сервер.
+	{"direct_failed", regexp.MustCompile(`(?i)outbound direct\S*\s[^\n]{0,40}(test failed|timeout|error)`)},
 	{"tun_error", regexp.MustCompile(`(?i)(configure|create|open|start)[^\n]{0,40}tun[^\n]{0,60}(error|fail)|wintun[^\n]{0,60}(error|fail)|tun device`)},
 	{"port_busy", regexp.MustCompile(`(?i)address already in use|only one usage of each socket address|bind: an attempt was made`)},
 	{"core_failed", regexp.MustCompile(`(?i)failed to (start|run) (the )?core|start service[^\n]{0,30}(error|fail)|core (process )?(exited|crashed)|panic:|createService - null`)},

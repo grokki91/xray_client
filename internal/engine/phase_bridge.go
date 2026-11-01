@@ -43,6 +43,8 @@ func (r *run) phase3(ctx context.Context) {
 		r.bridgeFail(err)
 		return
 	}
+	r.put(evidence.Evidence{ID: "S0", Source: evidence.FromNetwork, Reliability: evidence.High,
+		Facts: map[string]any{"ssh": "ok"}, Summary: "SSH-мост: подключение к серверу есть"})
 	r.factsEvidence(f, true)
 	r.step(3, "S1", "Сервер: факты (xm bridge facts)", "ok", "Xray "+f.Xray.Version)
 
@@ -75,8 +77,11 @@ func (r *run) phase3(ctx context.Context) {
 
 func (r *run) bridgeFail(err error) {
 	f := map[string]any{"error": bridgeCode(err)}
-	if errors.Is(err, bridge.ErrUnreachable) {
+	switch code := f["error"]; {
+	case code == "unreachable":
 		f["ssh"] = "unreachable"
+	case code == "host_key" || code == "auth" || code == "sudo" || code == "no_bridge" || code == "newer" || code == "older":
+		f["ssh"] = "ok" // отказ ключа, sudo или xm — уже после соединения: адрес по SSH доступен
 	}
 	r.put(evidence.Evidence{ID: "S0", Source: evidence.FromNetwork, Reliability: evidence.High, Facts: f, Summary: "SSH-мост: " + err.Error()})
 	r.step(3, "S1", "Сервер: мост SSH", "fail", err.Error())
@@ -318,6 +323,6 @@ var Titles = map[string]string{
 	"W1": "Сетевые адаптеры", "W2": "Маршрут к серверу", "W3": "DNS Windows", "W4": "Брандмауэр", "W5": "Антивирус", "W6": "Системный прокси",
 	"W7": "Часы", "W8": "IPv6", "W9": "MTU", "N1": "Интернет", "N2": "Белый список?", "N3": "Подмена DNS", "N4": "Маска по своему адресу",
 	"P1": "TCP до сервера", "P2": "TLS к серверу с SNI маски", "P3": "Эталонное ядро Xray", "P3m": "Эталон без X25519MLKEM768",
-	"P4": "Повтор через 30 с", "P5": "Из другой сети", "B1": "DNS за тоннелем", "B2": "Российский сайт через тоннель",
+	"P4": "Повтор через 30 с", "P5": "Из другой сети", "P6": "SSH-порт того же адреса", "N5": "SNI маски на чужом адресе", "B1": "DNS за тоннелем", "B2": "Российский сайт через тоннель",
 	"B3": "URL теста задержки клиента", "S0": "SSH-мост", "S1": "Факты сервера", "S2": "Журнал здоровья сервера", "S3": "Окно xm doctor",
 }

@@ -121,3 +121,24 @@ func TestSSHErrors(t *testing.T) {
 		t.Fatalf("%v %q", err, gotStdin)
 	}
 }
+
+// Порт SSH алиаса — из `ssh -G` (без подключения): только ключ -G и алиас.
+func TestSSHPort(t *testing.T) {
+	var args []string
+	s := &SSH{Alias: "xm-ui", Exe: "ssh", Run: func(_ context.Context, _ string, a []string, _ []byte) ([]byte, []byte, error) {
+		args = a
+		return []byte("user root\r\nhostname 203.0.113.50\r\nport 2222\r\nidentityfile ~/.ssh/id_ed25519\r\n"), nil, nil
+	}}
+	if p := s.Port(context.Background()); p != 2222 || strings.Join(args, " ") != "-G -- xm-ui" {
+		t.Fatalf("порт %d, аргументы %q", p, args)
+	}
+	s.Run = func(context.Context, string, []string, []byte) ([]byte, []byte, error) {
+		return nil, nil, errors.New("exit status 255")
+	}
+	if p := s.Port(context.Background()); p != 0 {
+		t.Fatalf("ошибка ssh → 0, получено %d", p)
+	}
+	if ParsePort([]byte("port 0\nport x\n")) != 0 || ParsePort([]byte("Port 22")) != 22 {
+		t.Fatal("разбор port")
+	}
+}
