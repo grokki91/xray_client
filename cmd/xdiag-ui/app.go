@@ -16,9 +16,12 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/grokki91/xray_client/internal/bridge"
+	"github.com/grokki91/xray_client/internal/clients"
 	"github.com/grokki91/xray_client/internal/engine"
 	"github.com/grokki91/xray_client/internal/netprobe"
+	"github.com/grokki91/xray_client/internal/profile"
 	"github.com/grokki91/xray_client/internal/report"
+	"github.com/grokki91/xray_client/internal/setup"
 	"github.com/grokki91/xray_client/internal/store"
 )
 
@@ -121,6 +124,9 @@ func (a *App) SaveSettings(f SettingsForm) error {
 		if !strings.HasPrefix(strings.ToLower(u), "vless://") {
 			return errors.New("профиль должен начинаться с vless://")
 		}
+		if len(profile.FindURIs(u)) == 0 {
+			return errors.New("профиль не разбирается: нужна ссылка vless://… целиком")
+		}
 		v.ProfileURI = u
 	}
 	if err := a.st.SaveVault(v); err != nil {
@@ -134,7 +140,59 @@ func (a *App) SaveSettings(f SettingsForm) error {
 		s.LiveSeconds = 60
 	}
 	s.Theme = a.st.LoadSettings().Theme // тема — переключателем (SetTheme), форма её не меняет
+	if v.SSHAlias == "" {
+		s.UseBridge = false // мост без алиаса не запустится
+	}
 	return a.st.SaveSettings(s)
+}
+
+// SetupStatus — состояние настроек без сети, по значениям формы (и несохранённым): профиль,
+// алиас и ssh.exe, папки клиентов. PowerShell и процессы ядер не запускаются.
+func (a *App) SetupStatus(f SettingsForm) (setup.Status, error) {
+	if a.err != nil {
+		return setup.Status{}, a.err
+	}
+	v, err := a.st.LoadVault()
+	if err != nil {
+		return setup.Status{}, err
+	}
+	uri := v.ProfileURI
+	switch u := strings.TrimSpace(f.NewURI); u {
+	case "":
+	case "-":
+		uri = ""
+	default:
+		uri = u
+	}
+	env := clients.DefaultEnv(nil, a.e.Rules.Compat)
+	env.RunVersion = nil // версия ядра v2rayN — дело диагностики, не формы
+	in := setup.Input{ProfileURI: uri, SSHAlias: f.Alias, HiddifyDir: f.HiddifyDir, V2rayNDir: f.V2rayNDir}
+	return setup.Check(a.ctx, in, env, func() error { _, err := exec.LookPath("ssh"); return err }), nil
+}
+
+// CheckBridge — проверка моста по кнопке: ssh → sudo -n xm bridge facts (только чтение). Алиас —
+// из формы, можно до сохранения.
+func (a *App) CheckBridge(alias string) setup.Item {
+	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
+	defer cancel()
+	return setup.Bridge(ctx, alias, func(al string) (setup.Facter, error) { return bridge.NewSSH(al) })
+}
+
+// PickDir — выбор папки клиента в диалоге Windows.
+func (a *App) PickDir(title, current string) (string, error) {
+	if st, err := os.Stat(current); err != nil || !st.IsDir() {
+		current = ""
+	}
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: title, DefaultDirectory: current})
+}
+
+// RevealProfile — сохранённый профиль vless:// (по явной кнопке «Показать»).
+func (a *App) RevealProfile() (string, error) {
+	if a.err != nil {
+		return "", a.err
+	}
+	v, err := a.st.LoadVault()
+	return v.ProfileURI, err
 }
 
 // SetTheme — тема окна (переключатель на боковой панели): dark | light | "" — как в Windows.

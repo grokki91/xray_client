@@ -185,6 +185,45 @@ func scanText(r io.Reader, s *LogSummary) {
 	}
 }
 
+// ─── Папка из настроек ───────────────────────────────────────────────────────
+
+// CheckDir — подходит ли папка, указанная вручную (настройки): "" — да, иначе причина
+// по-русски. Признаки — те же файлы, по которым адаптер её читает.
+func CheckDir(client, dir string) string {
+	if !dirExists(dir) {
+		return "папка не найдена"
+	}
+	switch client {
+	case "hiddify":
+		looks := func(d string) bool {
+			return exists(filepath.Join(d, "db.sqlite")) || exists(filepath.Join(d, "shared_preferences.json"))
+		}
+		switch {
+		case looks(dir):
+			return ""
+		case looks(filepath.Join(dir, "hiddify")):
+			return "это папка уровнем выше — нужна вложенная …\\hiddify"
+		case looks(filepath.Join(dir, "hiddify_portable_data")):
+			return "здесь программа — нужна папка данных …\\hiddify_portable_data рядом с ней"
+		case exists(filepath.Join(dir, "Hiddify.exe")):
+			return "здесь программа, а нужна папка данных (обычно %APPDATA%\\Hiddify\\hiddify)"
+		}
+		return "в папке нет файлов Hiddify (db.sqlite, shared_preferences.json)"
+	case "v2rayn":
+		looks := func(d string) bool {
+			return exists(filepath.Join(d, "guiConfigs", "guiNConfig.json")) || exists(filepath.Join(d, "v2rayN.exe"))
+		}
+		if looks(dir) {
+			return ""
+		}
+		if m, _ := filepath.Glob(filepath.Join(dir, "v2rayN*")); len(m) > 0 && looks(m[0]) {
+			return "это папка уровнем выше — нужна " + filepath.Base(m[0])
+		}
+		return "в папке нет v2rayN.exe и guiConfigs\\guiNConfig.json"
+	}
+	return "неизвестный клиент"
+}
+
 // ─── Общее ───────────────────────────────────────────────────────────────────
 
 func exists(p string) bool {

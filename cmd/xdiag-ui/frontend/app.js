@@ -36,6 +36,14 @@ const ICONS = {
   shieldBang: ["M12 3l8 3v6c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V6z", "M12 8v4.5", "M12 15.5h.01"],
   shieldQ: ["M12 3l8 3v6c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V6z", "M9.8 9.6a2.3 2.3 0 1 1 3.2 2.1c-.6.3-1 .8-1 1.4", "M12 16h.01"],
   shieldDash: ["M12 3l8 3v6c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V6z", "M9 12h6"],
+  cloud: ["M7 19a5 5 0 0 1-.9-9.92A6.5 6.5 0 0 1 18.6 9.6 4.7 4.7 0 0 1 17.5 19z"],
+  monitor: ["M5 4h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", "M8 20h8", "M12 16v4"],
+  archive: ["M3 4h18v4H3z", "M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8", "M10 12h4"],
+  lock: ["M6 11h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1z", "M8 11V7a4 4 0 0 1 8 0v4"],
+  eye: ["M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z", "M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6"],
+  swap: ["M7 7h13", "M16 3l4 4-4 4", "M17 17H4", "M8 13l-4 4 4 4"],
+  trash: ["M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3"],
+  link: ["M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1", "M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"],
 };
 const SVGNS = "http://www.w3.org/2000/svg";
 function icon(name) {
@@ -88,7 +96,7 @@ const PAGES = {
   run: ["Диагностика подключения", "Подробный анализ проблемы"],
   details: ["Подробно", "Все улики сеанса"],
   history: ["История", "Прошлые сеансы на этом ПК"],
-  settings: ["Настройки", "Профиль, мост к серверу и хранение"],
+  settings: ["Настройки", "Сервер, клиенты и как проверять"],
   data: ["Данные", "Что xdiag хранит на этом ПК"],
 };
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -315,7 +323,7 @@ async function init() {
     }
     const s = await api().Settings();
     applyTheme(s.theme);
-    $("optBridge").checked = !!s.use_bridge;
+    applyBridgeOpt(s.alias, s.use_bridge);
     const h = (await api().History()) || [];
     if (h.length) setLast(fmtWhen(h[0].at), /^ok/.test(h[0].code) ? "ok" : "problem");
   } catch (e) { /* окно работает и без настроек */ }
@@ -584,36 +592,210 @@ $("hClear").addEventListener("click", async () => {
 });
 
 // ─── Настройки ──────────────────────────────────────────────────────────────
-async function loadSettings() {
+// Форма с явным «Сохранить». Состояние (профиль, алиас, папки клиентов) проверяется сразу по
+// значениям формы, без сети; мост — только по кнопке: это SSH-подключение к серверу.
+let hasURI = false;
+let profMode = "";      // "" | "edit" — вставляется новый | "del" — удалится при сохранении
+let bridgeCheck = null; // {alias, item} — последняя проверка моста (до закрытия окна)
+let cleanForm = null;   // форма как сохранена
+const dirs = { hiddify: "", v2rayn: "" };
+
+function formValues() {
+  return {
+    retention_days: parseInt($("sRet").value, 10) || 0, export_include_address: $("sAddr").checked, client: $("sClient").value,
+    live_seconds: parseInt($("sLive").value, 10) || 60, use_bridge: $("sBridge").checked, reference: $("sRef").checked,
+    alias: $("sAlias").value.trim(), hiddify_dir: dirs.hiddify, v2rayn_dir: dirs.v2rayn,
+    new_uri: profMode === "del" ? "-" : profMode === "edit" ? $("sUri").value.trim() : "",
+  };
+}
+const dirty = () => cleanForm !== null && JSON.stringify(formValues()) !== cleanForm;
+function markDirty() {
+  const d = dirty();
+  $("sSave").disabled = !d;
+  $("sReset").hidden = !d;
+}
+function setMsg(text, bad) {
+  $("sMsg").textContent = text || "";
+  $("sMsg").className = bad ? "err" : "muted";
+}
+function edited(delay) {
+  setMsg("");
+  markDirty();
+  refreshStatus(delay);
+}
+
+async function loadSettings(force) {
+  if (!force && dirty()) { refreshStatus(); return; } // несохранённое не теряется при смене вкладки
   const s = await api().Settings();
+  hasURI = !!s.has_uri;
+  profMode = "";
   $("sUri").value = "";
-  $("sUri").placeholder = s.has_uri ? "сохранён (скрыт). Вставьте новый, чтобы заменить; «-» — удалить" : "не задан";
-  $("sUriHint").textContent = s.has_uri ? "Посмотреть сохранённый — вкладка «Данные»." : "";
   $("sAlias").value = s.alias || "";
-  $("sV2").value = s.v2rayn_dir || "";
-  $("sHid").value = s.hiddify_dir || "";
+  dirs.hiddify = s.hiddify_dir || "";
+  dirs.v2rayn = s.v2rayn_dir || "";
   $("sClient").value = s.client || "auto";
   $("sRet").value = s.retention_days;
   $("sLive").value = s.live_seconds;
   $("sRef").checked = !!s.reference;
   $("sBridge").checked = !!s.use_bridge;
   $("sAddr").checked = !!s.export_include_address;
+  bridgeToggle();
+  cleanForm = JSON.stringify(formValues());
+  markDirty();
+  profileControls();
+  refreshStatus();
 }
 
+// Значок состояния: точка + короткий текст; подробности — строкой ниже (`команды` — в <code>).
+function setStat(node, item) {
+  clear(node);
+  node.className = "stat s-" + item.state;
+  node.append(el("span", "sdot"), el("span", null, item.text));
+}
+function setNote(node, text) {
+  clear(node);
+  String(text || "").split("`").forEach((part, i) => node.append(i % 2 ? el("code", null, part) : document.createTextNode(part)));
+}
+
+let stTimer = null;
+let stSeq = 0;
+function refreshStatus(delay) {
+  clearTimeout(stTimer);
+  stTimer = setTimeout(async () => {
+    const seq = ++stSeq;
+    let st;
+    try { st = await api().SetupStatus(formValues()); } catch (e) { return; }
+    if (seq === stSeq) renderStatus(st);
+  }, delay || 0);
+}
+
+const lower1 = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+function renderStatus(st) {
+  // Профиль: сохранённый, новый (ещё не сохранён) или «удалится».
+  let p = { ...st.profile };
+  const typed = profMode === "edit" && $("sUri").value.trim() !== "";
+  if (profMode === "del") p = { state: "off", text: "Удалится при сохранении", note: "Диагностика будет брать профиль только из клиента." };
+  else if (typed) p.text = "Новый: " + lower1(p.text);
+  else if (hasURI && p.state === "ok") p.text = "Сохранён";
+  else if (hasURI && p.state !== "off") p.text = "Сохранён: " + lower1(p.text);
+  setStat($("stProf"), p);
+  setNote($("stProfNote"), p.note);
+
+  // Мост: без сети — алиас и ssh.exe; результат кнопки «Проверить» — для того же алиаса.
+  let b = st.bridge;
+  if (b.state === "idle" && bridgeCheck && bridgeCheck.alias === $("sAlias").value.trim()) b = bridgeCheck.item;
+  setStat($("stBridge"), b);
+  setNote($("stBridgeNote"), b.note);
+  $("bCheck").disabled = st.bridge.state === "off" || st.bridge.state === "bad";
+
+  (st.clients || []).forEach((c) => {
+    const tile = document.querySelector('.ctile[data-client="' + c.client + '"]');
+    if (!tile) return;
+    setStat(tile.querySelector("[data-st]"), { state: c.state, text: c.text + (c.version && c.state === "ok" ? " · " + c.version : "") });
+    tile.querySelector("[data-dir]").textContent = c.dir || "—";
+    tile.querySelector("[data-how]").textContent = c.dir ? (c.manual ? "(указана вручную)" : "(найдена автоматически)") : "";
+    setNote(tile.querySelector("[data-note]"), c.note);
+    tile.querySelector("[data-auto]").hidden = !dirs[c.client];
+  });
+}
+
+function profileControls() {
+  $("profEdit").hidden = profMode !== "edit";
+  $("pEditText").textContent = hasURI ? "Заменить" : "Добавить";
+  $("pEdit").hidden = profMode !== "";
+  $("pShow").hidden = $("pDel").hidden = !hasURI || profMode !== "";
+  $("pCancel").hidden = profMode === "";
+  $("pCancel").textContent = profMode === "del" ? "Не удалять" : "Отмена";
+}
+function setProfMode(m) {
+  profMode = m;
+  if (m !== "edit") $("sUri").value = "";
+  profileControls();
+  if (m === "edit") $("sUri").focus();
+  edited();
+}
+$("pEdit").addEventListener("click", () => setProfMode("edit"));
+$("pDel").addEventListener("click", () => setProfMode("del"));
+$("pCancel").addEventListener("click", () => setProfMode(""));
+$("sUri").addEventListener("input", () => edited(300));
+$("pShow").addEventListener("click", async () => {
+  try {
+    const t = await api().RevealProfile();
+    modal({ title: "Сохранённый профиль (расшифровано)", text: "Только для вас: здесь адрес сервера, UUID и ключ. Не пересылайте.", pre: t, no: null, yes: "Закрыть" });
+  } catch (e) { modal({ title: "Не прочитано", text: String(e), no: null, yes: "Закрыть" }); }
+});
+
+// «Опрашивать сервер» без алиаса не имеет смысла: выключено, пока алиас пуст.
+function bridgeToggle() {
+  const has = $("sAlias").value.trim() !== "";
+  if (!has) $("sBridge").checked = false;
+  $("sBridge").disabled = !has;
+  $("sBridgeHint").textContent = has
+    ? "Сразу отмечает «Мост (SSH)» на вкладке «Диагностика». Перед подключением xdiag всё равно спросит согласие."
+    : "Сначала укажите алиас. Без этой галочки мост включается на вкладке «Диагностика» для отдельного запуска.";
+}
+$("sAlias").addEventListener("input", () => { bridgeToggle(); edited(300); });
+
+$("bCheck").addEventListener("click", async () => {
+  const alias = $("sAlias").value.trim();
+  if (!alias) return;
+  const b = $("bCheck");
+  b.disabled = true;
+  b.classList.add("busy");
+  $("bCheckText").textContent = "Проверяется…";
+  setStat($("stBridge"), { state: "run", text: "Подключение по SSH…" });
+  setNote($("stBridgeNote"), "ssh " + alias + " → `sudo -n xm bridge facts`, до 45 с");
+  try {
+    bridgeCheck = { alias, item: await api().CheckBridge(alias) };
+  } catch (e) {
+    bridgeCheck = { alias, item: { state: "bad", text: "Не проверено", note: String(e) } };
+  } finally {
+    b.classList.remove("busy");
+    $("bCheckText").textContent = "Проверить";
+  }
+  refreshStatus();
+});
+
+document.querySelectorAll(".ctile").forEach((tile) => {
+  const c = tile.dataset.client;
+  tile.querySelector("[data-pick]").addEventListener("click", async () => {
+    const title = c === "hiddify" ? "Папка данных Hiddify (где db.sqlite)" : "Папка v2rayN (где v2rayN.exe)";
+    try {
+      const p = await api().PickDir(title, dirs[c] || tile.querySelector("[data-dir]").textContent);
+      if (p) { dirs[c] = p; edited(); }
+    } catch (e) { modal({ title: "Папка не выбрана", text: String(e), no: null, yes: "Закрыть" }); }
+  });
+  tile.querySelector("[data-auto]").addEventListener("click", () => { dirs[c] = ""; edited(); });
+});
+
+["sClient", "sRet", "sLive", "sRef", "sBridge", "sAddr"].forEach((id) => {
+  $(id).addEventListener("input", () => { setMsg(""); markDirty(); });
+  $(id).addEventListener("change", markDirty);
+});
+
 $("sSave").addEventListener("click", async () => {
-  const f = {
-    retention_days: parseInt($("sRet").value, 10) || 0, export_include_address: $("sAddr").checked, client: $("sClient").value,
-    live_seconds: parseInt($("sLive").value, 10) || 60, use_bridge: $("sBridge").checked, reference: $("sRef").checked,
-    alias: $("sAlias").value.trim(), hiddify_dir: $("sHid").value.trim(), v2rayn_dir: $("sV2").value.trim(), new_uri: $("sUri").value.trim(),
-  };
+  const f = formValues();
+  $("sSave").disabled = true;
   try {
     await api().SaveSettings(f);
-    $("sMsg").textContent = "Сохранено";
-    $("optBridge").checked = f.use_bridge;
-    loadSettings();
-    setTimeout(() => ($("sMsg").textContent = ""), 2000);
-  } catch (e) { $("sMsg").textContent = String(e); }
+    await loadSettings(true);
+    applyBridgeOpt(f.alias, f.use_bridge);
+    setMsg("Сохранено");
+    setTimeout(() => { if ($("sMsg").textContent === "Сохранено") setMsg(""); }, 2000);
+  } catch (e) {
+    setMsg(String(e), true);
+    markDirty();
+  }
 });
+$("sReset").addEventListener("click", () => { setMsg(""); loadSettings(true); });
+
+// «Мост (SSH)» на вкладке «Диагностика»: недоступен без алиаса, умолчание — из настроек.
+function applyBridgeOpt(alias, use) {
+  const o = $("optBridge");
+  o.disabled = !alias;
+  o.checked = !!alias && !!use;
+  o.parentElement.title = alias ? "Факты с сервера по SSH: xm bridge facts|health|doctor" : "Сначала укажите SSH-алиас в «Настройках»";
+}
 
 // ─── Данные ─────────────────────────────────────────────────────────────────
 async function loadData() {
