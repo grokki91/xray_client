@@ -157,29 +157,114 @@
       </section>
 
       <section id="tab-settings" class="panel">
-        <div class="card form">
-          <p class="muted first">Секреты (профиль, папки) хранятся только на этом ПК, зашифрованными Windows DPAPI для вашей учётной записи.</p>
-          <label>Профиль vless:// (если клиента нет или для сверки)
-            <textarea id="sUri" rows="3" placeholder="не задан"></textarea>
-            <span class="hint" id="sUriHint"></span>
-          </label>
-          <label>SSH-алиас сервера (Host из ~/.ssh/config)
-            <input id="sAlias" placeholder="например xm-ui">
-            <span class="hint">Мост вызывает только <code>sudo -n xm bridge facts|health|doctor</code>. Ключи SSH приложение не читает.</span>
-          </label>
-          <label>Папка v2rayN (если портативный и не найден сам)<input id="sV2" placeholder="C:\v2rayN"></label>
-          <label>Папка данных Hiddify (если не стандартная)<input id="sHid" placeholder="%APPDATA%\Hiddify\hiddify"></label>
-          <div class="cols">
-            <label>Клиент по умолчанию
-              <select id="sClient"><option value="auto">определять</option><option value="hiddify">Hiddify</option><option value="v2rayn">v2rayN</option></select>
-            </label>
-            <label>Хранить историю, дней<input id="sRet" type="number" min="0" max="365"></label>
-            <label>Окно xm doctor, с<input id="sLive" type="number" min="10" max="120"></label>
+        <section class="card sect">
+          <header class="shead2"><span class="sicon"><i data-icon="cloud"></i></span>
+            <div><h2>Сервер</h2><p>Профиль подключения и SSH-доступ к серверу</p></div></header>
+          <div class="sgrid">
+            <div class="sitem">
+              <div class="sline"><b>Профиль vless://</b><span id="stProf" class="stat"></span></div>
+              <p class="snote" id="stProfNote"></p>
+              <p class="hint">Не обязателен: диагностика берёт профиль из клиента. Нужен, если клиента на этом ПК нет, или для сверки — xdiag покажет, чем профиль клиента отличается от этого.</p>
+              <div id="profEdit" class="pedit" hidden>
+                <textarea id="sUri" rows="3" placeholder="vless://…" spellcheck="false" aria-label="Новый профиль vless://"></textarea>
+              </div>
+              <div class="row">
+                <button id="pEdit" class="ghost sm"><i data-icon="swap"></i><span id="pEditText">Заменить</span></button>
+                <button id="pShow" class="ghost sm"><i data-icon="eye"></i>Показать</button>
+                <button id="pDel" class="ghost sm danger"><i data-icon="trash"></i>Удалить</button>
+                <button id="pCancel" class="link sm" hidden>Отмена</button>
+              </div>
+            </div>
+            <div class="sitem">
+              <div class="sline"><b>SSH-мост</b><span id="stBridge" class="stat"></span></div>
+              <p class="snote" id="stBridgeNote"></p>
+              <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Нужен вход на сервер по SSH-ключу.</p>
+              <label class="field">Алиас из ~/.ssh/config
+                <span class="row nowrap">
+                  <input id="sAlias" placeholder="например xm-ui" spellcheck="false" autocomplete="off">
+                  <button id="bCheck" class="ghost sm"><span class="btnspin" aria-hidden="true"></span><i data-icon="link"></i><span id="bCheckText">Проверить</span></button>
+                </span>
+              </label>
+              <label class="tgl">
+                <input type="checkbox" id="sBridge" role="switch"><span class="switch" aria-hidden="true"></span>
+                <span class="ttext"><b>Опрашивать сервер при каждой диагностике</b>
+                  <span id="sBridgeHint">Сразу отмечает «Мост (SSH)» на вкладке «Диагностика». Перед подключением xdiag всё равно спросит согласие.</span></span>
+              </label>
+              <details class="more">
+                <summary>Что выполняется на сервере</summary>
+                <p>Только чтение: <code>sudo -n xm bridge facts</code>, <code>health</code>, <code>doctor</code>. Подключается системный ssh.exe с вашими ~/.ssh/config, ключом и known_hosts — xdiag их не читает и не хранит.</p>
+              </details>
+            </div>
           </div>
-          <label class="chk"><input type="checkbox" id="sRef"> Эталонная проба Xray-core (одно настоящее подключение к серверу)</label>
-          <label class="chk"><input type="checkbox" id="sBridge"> Мост к серверу по умолчанию</label>
-          <label class="chk"><input type="checkbox" id="sAddr"> В экспорт включать адрес сервера</label>
-          <div class="row"><button id="sSave" class="primary">Сохранить</button><span id="sMsg" class="muted"></span></div>
+        </section>
+
+        <section class="card sect">
+          <header class="shead2"><span class="sicon"><i data-icon="monitor"></i></span>
+            <div><h2>VPN-клиенты</h2><p>Где xdiag ищет Hiddify и v2rayN — файлы клиентов только читаются</p></div></header>
+          <label class="field inline">Какой клиент проверять
+            <select id="sClient"><option value="auto">определять автоматически</option><option value="hiddify">Hiddify</option><option value="v2rayn">v2rayN</option></select>
+          </label>
+          <p class="hint">Автоматически — подключённый или запущенный, при равенстве — Hiddify. Для одного запуска клиент выбирается на вкладке «Диагностика».</p>
+          <div class="sgrid" id="clientTiles">
+            <div class="sitem ctile" data-client="hiddify">
+              <div class="sline"><span class="cbadge" aria-hidden="true">H</span><b>Hiddify</b><span class="stat" data-st></span></div>
+              <p class="cdir"><span class="muted">Папка данных:</span> <span data-dir>—</span> <span class="muted" data-how></span></p>
+              <p class="snote" data-note></p>
+              <div class="row">
+                <button class="ghost sm" data-pick><i data-icon="folder"></i>Выбрать папку</button>
+                <button class="link sm" data-auto hidden>Искать автоматически</button>
+              </div>
+            </div>
+            <div class="sitem ctile" data-client="v2rayn">
+              <div class="sline"><span class="cbadge" aria-hidden="true">V</span><b>v2rayN</b><span class="stat" data-st></span></div>
+              <p class="cdir"><span class="muted">Папка:</span> <span data-dir>—</span> <span class="muted" data-how></span></p>
+              <p class="snote" data-note></p>
+              <div class="row">
+                <button class="ghost sm" data-pick><i data-icon="folder"></i>Выбрать папку</button>
+                <button class="link sm" data-auto hidden>Искать автоматически</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card sect">
+          <header class="shead2"><span class="sicon"><i data-icon="gear"></i></span>
+            <div><h2>Диагностика</h2><p>Что делает проверка, кроме чтения файлов и Windows</p></div></header>
+          <div class="sgrid">
+            <label class="tgl">
+              <input type="checkbox" id="sRef" role="switch"><span class="switch" aria-hidden="true"></span>
+              <span class="ttext"><b>Проверять сервер встроенным Xray-core</b>
+                <span>Одно настоящее подключение к серверу в пределах лимита 3 TLS в минуту. Отличает «не работает сервер или профиль» от «клиент настроен не так».</span></span>
+            </label>
+            <label class="field">Окно сервера (xm doctor)
+              <span class="row nowrap"><input id="sLive" type="number" min="10" max="120" class="num"><span class="muted">с</span></span>
+              <span class="hint">Сколько сервер слушает вашу попытку подключения — для моста и ручного режима. 10–120 с.</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="card sect">
+          <header class="shead2"><span class="sicon"><i data-icon="archive"></i></span>
+            <div><h2>История и экспорт</h2><p>Что остаётся на ПК и что уходит в файл экспорта</p></div></header>
+          <div class="sgrid">
+            <label class="field">Хранить историю сеансов
+              <span class="row nowrap"><input id="sRet" type="number" min="0" max="365" class="num"><span class="muted">дней</span></span>
+              <span class="hint">Старые сеансы удаляются при запуске; 0 — не хранить между запусками.</span>
+            </label>
+            <label class="tgl">
+              <input type="checkbox" id="sAddr" role="switch"><span class="switch" aria-hidden="true"></span>
+              <span class="ttext"><b>Добавлять адрес сервера в экспорт</b>
+                <span>Адрес, порт и SNI — в файл экспорта. Выключено: файл можно пересылать как есть. Ключи и UUID не попадают в экспорт никогда.</span></span>
+            </label>
+          </div>
+        </section>
+
+        <p class="dpapi muted"><i data-icon="lock"></i>Профиль, SSH-алиас и папки клиентов хранятся только на этом ПК, зашифрованными Windows DPAPI для вашей учётной записи.</p>
+
+        <div class="savebar">
+          <button id="sSave" class="primary" disabled><i data-icon="check"></i>Сохранить</button>
+          <button id="sReset" class="link" hidden>Отменить изменения</button>
+          <span id="sMsg" class="muted"></span>
         </div>
       </section>
 
