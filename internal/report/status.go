@@ -101,6 +101,12 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 		if str("P4", "tcp") == "timeout" {
 			srv.Note += " (и через 30 с)"
 		}
+		// P6 — SSH-порт того же адреса: открыт — молчит только порт, нет — весь адрес.
+		if p6 := set.Get("P6"); p6 != nil && (p6.Bool("reach") || p6.Bool("known")) {
+			srv.Note = yes(p6.Bool("reach"), "порт молчит, SSH отвечает", "не отвечают ни порт, ни SSH")
+		} else if str("S0", "ssh") == "ok" {
+			srv.Note = "порт молчит, SSH отвечает"
+		}
 	case reached:
 		srv.State, srv.Note = "ok", "отвечает"
 		if ms := num("P1", "ms"); ms > 0 {
@@ -324,4 +330,11 @@ func problemText(s *engine.SessionData, m rules.Result) string {
 		return name + " сейчас не подключён — проверено, пройдёт ли подключение"
 	}
 	return name + " не подключается к серверу («таймаут» или «Подключение…»)"
+}
+
+func yes(c bool, a, b string) string {
+	if c {
+		return a
+	}
+	return b
 }

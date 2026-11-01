@@ -103,6 +103,24 @@ func TestScenarios(t *testing.T) {
 			ev("P1", "outcome", "ok"), ev("P3", "outcome", "ok"), ev("P3m", "outcome", "real_cert")), "client.core.mlkem", Confirmed},
 		{"скрин 4: TCP до сервера нет ни сразу, ни через 30 с", with(hiddify(), ev("C10", "listening", true, "outcome", "fail", "error", "timeout"),
 			ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout", "tls", "tcp_timeout")), "path.ip.unreachable", Likely},
+		// Скрин 5 (2026-11-01): TCP до порта нет ни сразу, ни через 30 с, а SSH того же адреса открыт —
+		// адрес не заблокирован, молчит только порт: сначала сервер, а не «бан IP».
+		{"скрин 5: порт молчит, SSH того же адреса открыт", with(hiddify(), ev("C10", "listening", true, "outcome", "fail", "error", "eof"),
+			ev("P1", "outcome", "timeout"), ev("P6", "outcome", "ok", "reach", true, "banner", true, "known", false),
+			ev("P4", "tcp", "timeout", "tls", "tcp_timeout")), "server.port.drop", Likely},
+		{"порт молчит, мост дошёл до сервера (xm без bridge)", with(hiddify(), ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout"),
+			ev("S0", "error", "no_bridge", "ssh", "ok")), "server.port.drop", Likely},
+		{"порт молчит, SSH открыт, из другой сети тоже молчит", with(hiddify(), ev("P1", "outcome", "timeout"),
+			ev("P6", "outcome", "ok", "reach", true), ev("P5", "p1", "timeout")), "server.port.drop", Confirmed},
+		{"порт молчит, SSH открыт, из другой сети порт открыт", with(hiddify(), ev("P1", "outcome", "timeout"),
+			ev("P6", "outcome", "ok", "reach", true), ev("P4", "tcp", "timeout"), ev("P5", "p1", "ok")), "path.port", Confirmed},
+		{"молчат и порт, и SSH из алиаса", with(hiddify(), ev("P1", "outcome", "timeout"),
+			ev("P6", "outcome", "timeout", "reach", false, "known", true)), "path.ip.unreachable", Likely},
+		{"порт 22 молчит, SSH-порт неизвестен — не довод", with(hiddify(), ev("P1", "outcome", "timeout"),
+			ev("P6", "outcome", "timeout", "reach", false, "known", false)), "unknown.need_window", None},
+		{"hello режется, SNI маски режется и на чужом адресе", append([]evidence.Evidence{ev("N1", "ok", true), ev("N2", "ru_ok", true, "foreign_ok", true),
+			ev("N4", "ok", false, "stage", "hello_timeout"), ev("N5", "passed", false), ev("C3", "found", true)}, v2rayn("chrome", true),
+			ev("P1", "outcome", "ok"), ev("P2", "outcome", "hello_timeout")), "path.hello", Likely},
 		{"клиент запущен, трафик не идёт, эталон прошёл", with(v2rayn("chrome", true), ev("C10", "listening", true, "outcome", "fail"),
 			ev("P1", "outcome", "ok"), ev("P3", "outcome", "ok")), "client.tunnel", Confirmed},
 		{"клиент не работает, эталон получил маску — виноват профиль, не клиент", with(v2rayn("chrome", true), ev("C10", "listening", true, "outcome", "fail"),
@@ -212,5 +230,27 @@ func TestClientTunnelInEvidence(t *testing.T) {
 		if r.Code == "client.tunnel" {
 			t.Fatal("client.tunnel дублирует client.core.mlkem")
 		}
+	}
+}
+
+// Маска молчит после ClientHello: тот же SNI на чужом адресе тоже молчит — находка «режут SNI»;
+// отвечает — режут адрес маски, на REALITY это не влияет, находки нет.
+func TestSNIFinding(t *testing.T) {
+	e, _ := Load()
+	find := func(evs ...evidence.Evidence) bool {
+		set := append([]evidence.Evidence{ev("N1", "ok", true), ev("N2", "ru_ok", true, "foreign_ok", true), ev("C3", "found", true),
+			ev("N4", "ok", false, "stage", "hello_timeout"), hiddify(), ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout")}, evs...)
+		for _, f := range e.Decide(evidence.FromList(set)).Findings {
+			if f.Code == "path.sni" {
+				return true
+			}
+		}
+		return false
+	}
+	if !find(ev("N5", "passed", false)) {
+		t.Fatal("SNI режется и на чужом адресе — находка path.sni")
+	}
+	if find(ev("N5", "passed", true)) || find() {
+		t.Fatal("SNI на чужом адресе проходит или не проверен — находки нет")
 	}
 }

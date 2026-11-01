@@ -36,6 +36,28 @@ func ProbeTCP(ctx context.Context, d *Dialer, b *Budget, addr string) TCPResult 
 	return TCPResult{Outcome: "ok", Ms: ms}
 }
 
+// ProbeBanner — P6: TCP к addr и до wait ждёт первые байты сервера (SSH-сервер сам шлёт
+// «SSH-2.0-…»). banner — ответ начинается с prefix: соединение принял именно этот сервер, а не
+// промежуточный узел. Текст ответа не сохраняется. budget != nil — соединение к серверу.
+func ProbeBanner(ctx context.Context, d *Dialer, b *Budget, addr, prefix string, wait time.Duration) (TCPResult, bool) {
+	if b != nil {
+		if err := b.Acquire(TCP); err != nil {
+			return TCPResult{Outcome: "budget"}, false
+		}
+	}
+	t0 := time.Now()
+	c, err := d.DialContext(ctx, "tcp", addr)
+	ms := int(time.Since(t0).Milliseconds())
+	if err != nil {
+		return TCPResult{Outcome: Classify(err), Ms: ms}, false
+	}
+	defer c.Close()
+	_ = c.SetReadDeadline(time.Now().Add(wait))
+	buf := make([]byte, len(prefix))
+	n, _ := io.ReadFull(c, buf)
+	return TCPResult{Outcome: "ok", Ms: ms}, prefix != "" && string(buf[:n]) == prefix
+}
+
 // TLSResult — P2/N4: TLS-хендшейк с отпечатком chrome.
 type TLSResult struct {
 	// cert — сертификат получен (CertValid — валиден для SNI); tcp_* — TCP не установился;

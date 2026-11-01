@@ -230,7 +230,8 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 		return nil, err
 	}
 	o := engine.Options{Client: set.Client, ProfileURI: v.ProfileURI, HiddifyDir: v.HiddifyDir, V2rayNDir: v.V2rayNDir,
-		Reference: set.Reference, LiveSeconds: set.LiveSeconds, Capture: req.Capture, CaptureSecs: 60, Offline: req.Offline}
+		Reference: set.Reference, LiveSeconds: set.LiveSeconds, Capture: req.Capture, CaptureSecs: 60, Offline: req.Offline,
+		SSHAlias: v.SSHAlias} // алиас без моста — только порт SSH для P6 (`ssh -G`, без подключения)
 	if req.Client != "" {
 		o.Client = req.Client
 	}
@@ -238,7 +239,7 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 		if v.SSHAlias == "" {
 			return nil, errors.New("для моста укажите SSH-алиас в «Настройках»")
 		}
-		o.Bridge, o.SSHAlias = "ssh", v.SSHAlias
+		o.Bridge = "ssh"
 	}
 	if exe, err := os.Executable(); err == nil {
 		o.SelfExe = exe

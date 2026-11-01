@@ -114,3 +114,38 @@ func TestClassifyAndProbes(t *testing.T) {
 		t.Fatalf("закрытый порт: %+v", r)
 	}
 }
+
+// P6: SSH-сервер сам шлёт баннер; молчащий сервер — TCP есть, баннера нет; бюджет списывается.
+func TestProbeBanner(t *testing.T) {
+	serve := func(greet string) string {
+		ln, _ := net.Listen("tcp", "127.0.0.1:0")
+		t.Cleanup(func() { ln.Close() })
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				if greet != "" {
+					_, _ = c.Write([]byte(greet))
+				}
+				go func() { time.Sleep(time.Second); c.Close() }()
+			}
+		}()
+		return ln.Addr().String()
+	}
+	d := &Dialer{Timeout: 2 * time.Second}
+	b := NewBudget()
+	if r, ok := ProbeBanner(context.Background(), d, b, serve("SSH-2.0-test\r\n"), "SSH-", time.Second); r.Outcome != "ok" || !ok {
+		t.Fatalf("SSH: %+v %v", r, ok)
+	}
+	if r, ok := ProbeBanner(context.Background(), d, b, serve(""), "SSH-", 200*time.Millisecond); r.Outcome != "ok" || ok {
+		t.Fatalf("молчит: %+v %v", r, ok)
+	}
+	if r, ok := ProbeBanner(context.Background(), d, b, serve("HTTP/1.1 400"), "SSH-", time.Second); r.Outcome != "ok" || ok {
+		t.Fatalf("не SSH: %+v %v", r, ok)
+	}
+	if u := b.Usage(); u.TotalTCP != 3 {
+		t.Fatalf("бюджет: %+v", u)
+	}
+}

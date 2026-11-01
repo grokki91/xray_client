@@ -173,7 +173,7 @@ func (r *run) clientEvidence() {
 var logTitles = map[string]string{
 	"reality_failed": "reality verification failed", "real_cert": "received real certificate", "invalid_conn": "processed invalid connection",
 	"timeout": "таймаут", "tun_error": "ошибка TUN", "port_busy": "порт занят", "core_failed": "ядро не запустилось",
-	"empty_fp": "пустой fingerprint", "dns_error": "ошибка DNS",
+	"empty_fp": "пустой fingerprint", "dns_error": "ошибка DNS", "direct_failed": "сбой прямых проверок клиента (мимо сервера)",
 }
 
 func modeText(m string) string {

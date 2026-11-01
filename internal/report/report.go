@@ -116,6 +116,13 @@ func Build(s *engine.SessionData) View {
 	for _, r := range v.Also {
 		vw.Also = append(vw.Also, fmt.Sprintf("%s (%s)", r.Title, r.Level.Text()))
 	}
+	// Возможные причины при найденной главной — тоже сюда: всплывут после её устранения
+	// (порт открыли, а Hiddify 4.x всё равно не подключится к серверу с правилом X25519MLKEM768).
+	if m.Kind == "cause" && m.Level.Rank() >= rules.Likely.Rank() {
+		for _, r := range v.Possible {
+			vw.Also = append(vw.Also, fmt.Sprintf("%s (%s)", r.Title, r.Level.Text()))
+		}
+	}
 	for _, r := range v.Findings {
 		vw.Findings = append(vw.Findings, fmt.Sprintf("%s (%s)", r.Title, r.Level.Text()))
 	}

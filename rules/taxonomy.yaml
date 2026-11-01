@@ -22,6 +22,7 @@ codes:
   server.handshake:      {layer: L4, order: 153, title: "Сервер: своё рукопожатие не проходит"}
   server.firewall:       {layer: L4, order: 154, title: "Сервер: порт закрыт в UFW"}
   server.syn:            {layer: L4, order: 155, title: "Сервер: SYN доходит, ответа нет"}
+  server.port.drop:      {layer: L4, order: 156, title: "Сервер: порт молчит, SSH отвечает"}
   client.service.down:   {layer: L0, order: 200, title: "Клиент: ядро или служба не запустились"}
   client.tun.failed:     {layer: L0, order: 210, title: "Клиент: TUN не поднялся"}
   client.config.convert: {layer: L0, order: 220, title: "Клиент: профиль сконвертирован с ошибкой"}
@@ -47,6 +48,7 @@ codes:
   profile.user:          {layer: L5, order: 345, title: "Профиль: UUID или путь"}
   path.whitelist:        {layer: L3, order: 490, title: "Белый список мобильной сети"}
   path.ip.unreachable:   {layer: L3, order: 500, title: "Адрес сервера недоступен по пути"}
+  path.port:             {layer: L3, order: 505, title: "Порт сервера режется по пути"}
   path.hello:            {layer: L3, order: 510, title: "ClientHello режется по пути"}
   path.freeze.post:      {layer: L3, order: 520, title: "Заморозка после рукопожатия"}
   path.freeze.mid:       {layer: L3, order: 525, title: "Заморозка на 1–10 КБ"}
@@ -65,6 +67,7 @@ codes:
   lan.dns.spoof:         {layer: L2, order: 953, title: "Провайдер подменяет DNS"}
   lan.ipv6.leak:         {layer: L2, order: 954, title: "IPv6 мимо тоннеля"}
   beyond.ru_direct:      {layer: L6, order: 955, title: "Российские сайты через тоннель закрыты"}
+  path.sni:              {layer: L3, order: 956, title: "SNI маски режется в этой сети"}
   # Итоги без причины.
   unknown.budget:        {layer: "-", order: 989, title: "Сервер не проверен: лимит проб"}
   unknown.need_window:   {layer: "-", order: 990, title: "Без окна сервера причину не назвать"}

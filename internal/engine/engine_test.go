@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +20,7 @@ import (
 
 	"github.com/grokki91/xray_client/internal/bridge"
 	"github.com/grokki91/xray_client/internal/clients"
+	"github.com/grokki91/xray_client/internal/evidence"
 	"github.com/grokki91/xray_client/internal/netprobe"
 	"github.com/grokki91/xray_client/internal/osw"
 	"github.com/grokki91/xray_client/internal/profile"
@@ -407,6 +411,84 @@ func TestBudgetPerServer(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		if u := e2.Budget(pa.ServerKey()).Usage(); u.TCP != 2 || u.TLS != 1 {
 			t.Fatalf("восстановлено %d: %+v", i, u)
+		}
+	}
+}
+
+// probeRun — сеанс без фаз: для проверки отдельных проб на петле.
+func probeRun(t *testing.T, o Options, prof *profile.Profile) *run {
+	e := testEngine(t, nil, t.TempDir())
+	return &run{e: e, o: o, set: evidence.NewSet(), red: redact.New(nil), now: time.Now, dial: &netprobe.Dialer{Timeout: 2 * time.Second},
+		res: e.Resolver, sess: &SessionData{}, prof: prof, budget: netprobe.NewBudget()}
+}
+
+// listen — сервер на петле: на каждое соединение пишет greet (пусто — молчит) и держит его hold.
+func listen(t *testing.T, greet string, hold time.Duration) *net.TCPAddr {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if greet != "" {
+				_, _ = c.Write([]byte(greet))
+			}
+			go func() { time.Sleep(hold); c.Close() }()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr)
+}
+
+// Скрин 5: порт сервера молчит, SSH того же адреса открыт. Порт SSH — из алиаса (`ssh -G`), в
+// улики и текст он не попадает; проба — одно TCP в бюджете сервера.
+func TestSSHPortProbe(t *testing.T) {
+	ssh := listen(t, "SSH-2.0-OpenSSH_9.6\r\n", time.Second)
+	r := probeRun(t, Options{SSHAlias: "xm-test"}, &profile.Profile{Address: "127.0.0.1", Port: 1})
+	var alias string
+	r.e.SSHPort = func(_ context.Context, a string) int { alias = a; return ssh.Port }
+	r.sshPort(context.Background(), ssh.IP)
+	p6 := r.set.Get("P6")
+	if p6 == nil || !p6.Bool("reach") || !p6.Bool("banner") || !p6.Bool("known") || alias != "xm-test" {
+		t.Fatalf("P6: %+v, алиас %q", p6, alias)
+	}
+	if strings.Contains(p6.Summary, fmt.Sprint(ssh.Port)) || !strings.Contains(p6.Summary, "молчит только порт") {
+		t.Fatalf("текст P6: %q", p6.Summary)
+	}
+	if u := r.budget.Usage(); u.TotalTCP != 1 {
+		t.Fatalf("бюджет: %+v", u)
+	}
+	// SSH на том же порту, что сервер, — сравнивать не с чем: пробы нет.
+	r = probeRun(t, Options{SSHAlias: "xm-test"}, &profile.Profile{Address: "127.0.0.1", Port: ssh.Port})
+	r.e.SSHPort = func(context.Context, string) int { return ssh.Port }
+	r.sshPort(context.Background(), ssh.IP)
+	if r.set.Has("P6") || r.budget.Usage().TotalTCP != 0 {
+		t.Fatal("P6 на порт сервера")
+	}
+}
+
+// N5: маска по своему адресу молчит — тот же SNI на адрес эталона. Эталон отвечает TLS — SNI не
+// режется; молчит — режут по SNI.
+func TestSNIElsewhere(t *testing.T) {
+	tlsSrv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer tlsSrv.Close()
+	silent := listen(t, "", 300*time.Millisecond) // молчит после ClientHello и закрывает
+	for _, c := range []struct {
+		url    string
+		passed bool
+	}{{tlsSrv.URL, true}, {"https://" + silent.String() + "/", false}} {
+		r := probeRun(t, Options{}, &profile.Profile{SNI: "www.example.com"})
+		h := &rules.Hosts{}
+		h.Internet = slices.Grow(h.Internet, 1)[:1]
+		h.Internet[0].URL = c.url
+		r.sniElsewhere(context.Background(), h, []netprobe.HTTPResult{{OK: true, Region: "foreign"}})
+		n5 := r.set.Get("N5")
+		if n5 == nil || n5.Bool("passed") != c.passed {
+			t.Fatalf("%s: N5 %+v", c.url, n5)
 		}
 	}
 }

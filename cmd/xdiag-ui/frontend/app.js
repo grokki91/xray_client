@@ -235,7 +235,7 @@ const fmtWhen = (at) => new Date(at).toLocaleString("ru-RU", { day: "2-digit", m
 // ─── События ядра ───────────────────────────────────────────────────────────
 const stepNodes = new Map();
 // Доля пути по шагу: порядок фаз ядра (0 → Windows и клиенты, 1 → сеть, 2 → сервер, 3–4 → мост, захват).
-const STEP_AT = { W: 4, C: 10, N1: 20, C10: 30, P: 40, P1: 40, P3: 52, P3m: 70, P2: 80, P4: 84, S1: 88, S2: 90, S3: 93, C7: 96, save: 98 };
+const STEP_AT = { W: 4, C: 10, N1: 20, N5: 24, C10: 30, P: 40, P1: 40, P6: 46, P3: 52, P3m: 70, P2: 80, P4: 84, S1: 88, S2: 90, S3: 93, C7: 96, save: 98 };
 let progressPct = 0;
 let waitTimer = null;
 let t0 = 0;
