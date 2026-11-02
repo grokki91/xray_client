@@ -47,6 +47,9 @@ func status(s *engine.SessionData, m rules.Result) Status {
 		return Status{"ok", "Всё работает"}
 	case m.Kind == "ok":
 		return Status{"ok", "Сервер и профиль в порядке"}
+	case m.Code == "beyond.latency_url" && m.Level.Rank() >= rules.Likely.Rank():
+		// Тоннель работает — «не работает» было бы неправдой: врёт только индикатор клиента.
+		return Status{"ok", "Тоннель работает: «таймаут» — только индикатор клиента"}
 	case m.Code == "lan.noinet" && m.Level.Rank() >= rules.Likely.Rank():
 		return Status{"problem", "Не работает: нет интернета"}
 	case m.Code == "profile.missing":
@@ -107,6 +110,10 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 		} else if str("S0", "ssh") == "ok" {
 			srv.Note = "порт молчит, SSH отвечает"
 		}
+		// P5 — сеанс из другой сети: там тоже тишина — дело не в этой сети.
+		if p5 := str("P5", "p1"); p5 == "timeout" || p5 == "unreachable" {
+			srv.Note += " — и из другой сети"
+		}
 	case reached:
 		srv.State, srv.Note = "ok", "отвечает"
 		if ms := num("P1", "ms"); ms > 0 {
@@ -147,11 +154,18 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 	if cx := set.Get("CX"); cx != nil && cx.Str("client") != "uri" {
 		cl.Title = clientShort(s)
 		cl.Note = "не проверялся"
+		connecting := str("C10", "shows") == "connecting"
 		switch str("C10", "outcome") {
 		case "ok":
 			cl.State, cl.Note = "ok", "подключён, трафик идёт"
+			if connecting {
+				cl.State, cl.Note = "warn", "трафик идёт, а пишет «Подключение…»"
+			}
 		case "fail":
 			cl.State, cl.Note = "fail", "подключается, трафик не идёт"
+			if connecting {
+				cl.Note = "«Подключение…»: трафик не идёт"
+			}
 		case "freeze":
 			cl.State, cl.Note = "warn", "подключён, загрузка встаёт"
 		case "not_listening":
@@ -266,12 +280,21 @@ func target(s *engine.SessionData) *Target {
 	return t
 }
 
+// clientState — состояние клиента для окна. У Hiddify — его же словами (C10.shows: что сейчас
+// на кнопке), чтобы окно и клиент не спорили: порт слушает и при «Подключение…».
 func clientState(s *engine.SessionData) string {
 	set := evidence.FromList(s.Evidence)
+	connecting := set.Get("C10").Str("shows") == "connecting"
 	switch set.Get("C10").Str("outcome") {
 	case "ok":
+		if connecting {
+			return "«Подключение…», хотя трафик идёт"
+		}
 		return "подключён"
 	case "fail":
+		if connecting {
+			return "«Подключение…»: трафик не идёт"
+		}
 		return "подключается, трафик не идёт"
 	case "freeze":
 		return "подключён, загрузка встаёт"
@@ -328,6 +351,12 @@ func problemText(s *engine.SessionData, m rules.Result) string {
 	}
 	if clientState(s) == "не подключён" {
 		return name + " сейчас не подключён — проверено, пройдёт ли подключение"
+	}
+	if c10 := evidence.FromList(s.Evidence).Get("C10"); c10.Str("shows") == "connecting" {
+		if c10.Str("outcome") == "ok" {
+			return name + " пишет «Подключение…», хотя трафик через него идёт"
+		}
+		return name + " пишет «Подключение…»: ядро запущено, а трафик через сервер не идёт"
 	}
 	return name + " не подключается к серверу («таймаут» или «Подключение…»)"
 }

@@ -13,6 +13,7 @@ const sample = `{"adapters":[{"Name":"Ethernet","InterfaceDescription":"Intel(R)
 {"Name":"WireGuard","InterfaceDescription":"WireGuard Tunnel","ifIndex":41,"Status":"Disconnected"}],
 "ipif":[{"ifIndex":12,"NlMtu":1500,"InterfaceMetric":25},{"ifIndex":40,"NlMtu":9000,"InterfaceMetric":0}],
 "routes":[{"ifIndex":12,"DestinationPrefix":"0.0.0.0/0","RouteMetric":0,"NextHop":"192.168.1.1"},{"ifIndex":40,"DestinationPrefix":"0.0.0.0/1","RouteMetric":0}],
+"gw":{"ifIndex":12,"mac":"02-00-5E-00-00-01"},
 "dns":{"InterfaceIndex":12,"n":2},"doh":null,"smhnr":1,"nrpt":0,
 "fw":[{"Name":"Domain","Enabled":1},{"Name":"Private","Enabled":1}],"fwblock":"xray.exe",
 "av":[{"displayName":"Windows Defender","productState":397568},{"displayName":"Kaspersky","productState":266240}],
@@ -30,8 +31,8 @@ func TestParsePS(t *testing.T) {
 	if len(f.Adapters) != 3 || f.Adapter(40).Kind != "tun" || f.Adapter(12).Kind != "physical" || f.Adapter(41).Up {
 		t.Fatalf("адаптеры: %+v", f.Adapters)
 	}
-	if f.DefaultIfIndex != 12 || !f.DefaultViaTUN || f.Adapter(12).MTU != 1500 {
-		t.Fatalf("маршрут: %d %v", f.DefaultIfIndex, f.DefaultViaTUN)
+	if f.DefaultIfIndex != 12 || !f.DefaultViaTUN || f.Adapter(12).MTU != 1500 || f.GatewayMAC != "02005e000001" {
+		t.Fatalf("маршрут: %d %v, шлюз %q", f.DefaultIfIndex, f.DefaultViaTUN, f.GatewayMAC)
 	}
 	if f.DNSServers != 2 || f.DoH || !f.SMHNROff || !f.FirewallOn || len(f.BlockRules) != 1 {
 		t.Fatalf("dns/fw: %+v", f)

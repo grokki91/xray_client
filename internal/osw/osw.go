@@ -44,6 +44,9 @@ type Facts struct {
 	Adapters       []Adapter `json:"adapters"`
 	DefaultIfIndex int       `json:"default_if_index"` // физический адаптер с маршрутом по умолчанию
 	DefaultViaTUN  bool      `json:"default_via_tun"`  // маршрут по умолчанию сейчас идёт в TUN/VPN
+	// GatewayMAC — MAC шлюза маршрута по умолчанию (нижний регистр, без разделителей): отпечаток
+	// сети. Идентифицирует сеть пользователя — наружу только хэшем (engine.networkKey).
+	GatewayMAC string `json:"-"`
 
 	DNSServers int  `json:"dns_servers"`
 	DoH        bool `json:"doh"`

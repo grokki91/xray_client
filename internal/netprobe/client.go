@@ -34,13 +34,18 @@ type ClientResult struct {
 	Ms204   int    `json:"ms_204"`
 	Bytes   int64  `json:"bytes"`
 	Error   string `json:"error,omitempty"` // timeout | refused | reset | eof | status | error
+	// TestOK — открылся ли через клиент его собственный URL проверки задержки (nil — не
+	// проверялся). Hiddify по этому тесту пишет «Подключено» или «Подключение…».
+	TestOK *bool `json:"test_ok,omitempty"`
 }
 
-// ProbeViaClient — GET probe204 (ожидается 204), затем до limit байт с download. port > 0 — через
-// SOCKS5 127.0.0.1:port (локальный прокси клиента, имя резолвит клиент); port = 0 — по
-// системному маршруту (режим TUN без локального прокси). Сертификат за тоннелем не проверяется:
-// при сбитых часах ПК проверка дала бы ложную «поломку клиента».
-func ProbeViaClient(ctx context.Context, port int, probe204, download string, limit int) ClientResult {
+// ProbeViaClient — GET probe204 (ожидается 204), затем до limit байт с download и, если 204
+// прошёл, — testURL (URL теста задержки самого клиента: годится любой HTTP-ответ, как в
+// URL-тесте sing-box). port > 0 — через SOCKS5 127.0.0.1:port (локальный прокси клиента, имя
+// резолвит клиент); port = 0 — по системному маршруту (режим TUN без локального прокси).
+// Сертификат за тоннелем не проверяется: при сбитых часах ПК проверка дала бы ложную «поломку
+// клиента».
+func ProbeViaClient(ctx context.Context, port int, probe204, download string, limit int, testURL string) ClientResult {
 	tr := &http.Transport{DisableKeepAlives: true, TLSHandshakeTimeout: 12 * time.Second, ResponseHeaderTimeout: 12 * time.Second,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec
 	if port > 0 {
@@ -82,7 +87,29 @@ func ProbeViaClient(ctx context.Context, port int, probe204, download string, li
 			r.Outcome = "freeze"
 		}
 	}
+	if testURL != "" && ctx.Err() == nil {
+		ok := anyResponse(ctx, hc, testURL, 10*time.Second)
+		r.TestOK = &ok
+	}
 	return r
+}
+
+// anyResponse — пришёл ли хоть какой-то HTTP-ответ за timeout.
+func anyResponse(ctx context.Context, hc *http.Client, u string, timeout time.Duration) bool {
+	c, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(c, http.MethodGet, u, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	resp.Body.Close()
+	return true
 }
 
 // Download читает до limit байт; stalled — не было прогресса дольше stall (или 30 с на всё).

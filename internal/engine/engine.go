@@ -44,20 +44,18 @@ type Options struct {
 	Offline   bool // только фаза 0
 	Reference bool // эталонная проба P3/P3m
 
-	OtherNetwork bool         // повтор «из другой сети» (P5) — сравнение с Prev
-	Prev         *SessionData // предыдущий сеанс для P5
-	Bridge       string       // "" | "ssh"
-	SSHAlias     string       // алиас из ~/.ssh/config: мост (Bridge=ssh) и порт SSH для P6
-	LiveSeconds  int          // окно xm doctor
-	Imports      []Import     // файлы xm (ручной мост)
-	PastedLogs   string       // экспорт логов клиента
-	Capture      bool         // C7: pktmon (UAC)
-	CaptureSecs  int          // окно захвата
-	SelfExe      string       // путь к xdiag.exe для capture-helper
-	SkipRepeat   bool         // не ждать 30 с ради P4 (тесты)
-	Hosts        *rules.Hosts // переопределение эталонов (тесты)
-	PreferIPv4   bool
-	Now          func() time.Time // тесты
+	Bridge      string       // "" | "ssh"
+	SSHAlias    string       // алиас из ~/.ssh/config: мост (Bridge=ssh) и порт SSH для P6
+	LiveSeconds int          // окно xm doctor
+	Imports     []Import     // файлы xm (ручной мост)
+	PastedLogs  string       // экспорт логов клиента
+	Capture     bool         // C7: pktmon (UAC)
+	CaptureSecs int          // окно захвата
+	SelfExe     string       // путь к xdiag.exe для capture-helper
+	SkipRepeat  bool         // не ждать 30 с ради P4 (тесты)
+	Hosts       *rules.Hosts // переопределение эталонов (тесты)
+	PreferIPv4  bool
+	Now         func() time.Time // тесты
 }
 
 // Import — содержимое файла xm (doctor.json / health.json / facts.json).
@@ -105,8 +103,9 @@ type Engine struct {
 	Resolver  *net.Resolver // nil — системный (тесты подставляют свой)
 	// LocalOpen — слушает ли 127.0.0.1:port (локальный прокси клиента); nil — не проверять.
 	LocalOpen func(port int) bool
-	// ProbeClient — C10: запрос через локальный прокси клиента (port 0 — по системному маршруту).
-	ProbeClient func(ctx context.Context, port int, probe204, download string, limit int) netprobe.ClientResult
+	// ProbeClient — C10: запрос через локальный прокси клиента (port 0 — по системному маршруту) и
+	// URL теста задержки самого клиента (testURL).
+	ProbeClient func(ctx context.Context, port int, probe204, download string, limit int, testURL string) netprobe.ClientResult
 	// SSHPort — порт SSH алиаса (`ssh -G`, без подключения); 0 — не узнать, P6 берёт 22.
 	SSHPort func(ctx context.Context, alias string) int
 
@@ -182,8 +181,8 @@ type SessionData struct {
 	Logs         []string            `json:"logs,omitempty"` // характерные строки (уже без секретов)
 	Budget       netprobe.Usage      `json:"budget"`
 	Bridge       string              `json:"bridge"`
-	OtherNetwork bool                `json:"other_network,omitempty"`
-	Cancelled    bool                `json:"cancelled,omitempty"` // остановлен до конца проверок
+	OtherNetwork bool                `json:"other_network,omitempty"` // есть сравнение с другой сетью (P5)
+	Cancelled    bool                `json:"cancelled,omitempty"`     // остановлен до конца проверок
 	Secret       *Secret             `json:"secret,omitempty"`
 }
 
@@ -194,6 +193,9 @@ type Secret struct {
 	Port   int    `json:"port"`
 	SNI    string `json:"sni"`
 	Name   string `json:"name,omitempty"` // имя профиля у пользователя: окно показывает, что проверялось
+	// Network — отпечаток сети ПК (хэш MAC шлюза): по нему следующий сеанс из другой сети
+	// сравнивается с этим (P5) без галочки «я в другой сети».
+	Network string `json:"network,omitempty"`
 }
 
 // ClientInfo — клиент без путей.
@@ -272,7 +274,7 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 	}
 	var rnd [2]byte
 	_, _ = rand.Read(rnd[:])
-	r.sess = &SessionData{ID: store.NewID(now(), binary.BigEndian.Uint16(rnd[:])), App: Version, Started: now(), OtherNetwork: o.OtherNetwork}
+	r.sess = &SessionData{ID: store.NewID(now(), binary.BigEndian.Uint16(rnd[:])), App: Version, Started: now()}
 	for _, hst := range r.hosts().PublicHosts() {
 		r.red.Keep(hst)
 	}
@@ -288,15 +290,15 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 		if ctx.Err() == nil {
 			r.phase2(ctx)
 		}
+		if ctx.Err() == nil {
+			r.otherNetwork()
+		}
 	}
 	if ctx.Err() == nil {
 		r.phase3(ctx)
 	}
 	if o.Capture && ctx.Err() == nil {
 		r.phaseCapture(ctx)
-	}
-	if o.OtherNetwork && o.Prev != nil {
-		r.mergeOtherNetwork()
 	}
 	r.finish()
 	if ctx.Err() != nil {
@@ -373,7 +375,8 @@ func (r *run) finish() {
 	if r.prof != nil {
 		s := r.prof.Summary()
 		r.sess.Profile = &s
-		r.sess.Secret = &Secret{Server: r.prof.Address, Port: r.prof.Port, SNI: r.prof.SNI, Name: strings.TrimSpace(r.prof.Name)}
+		r.sess.Secret = &Secret{Server: r.prof.Address, Port: r.prof.Port, SNI: r.prof.SNI, Name: strings.TrimSpace(r.prof.Name),
+			Network: networkKey(&r.facts)}
 	}
 	if r.e.Store != nil && r.prof != nil && r.budget != nil {
 		key := r.prof.ServerKey()

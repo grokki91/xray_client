@@ -375,7 +375,7 @@ async function run() {
   let v = null;
   try {
     v = await api().Run({ client: $("client").value, bridge: $("optBridge").checked, capture: $("optCapture").checked,
-      other_network: $("optOther").checked, offline: false });
+      offline: false });
     $("extrasNote").textContent = "";
   } catch (e) {
     await modal({ title: "Диагностика не выполнена", text: String(e), no: null, yes: "Закрыть" });

@@ -25,6 +25,11 @@ $r = [ordered]@{}
 try { $r.adapters = @(Get-NetAdapter | Select-Object Name, InterfaceDescription, ifIndex, Status) } catch {}
 try { $r.ipif = @(Get-NetIPInterface -AddressFamily IPv4 | Select-Object ifIndex, NlMtu, InterfaceMetric, ConnectionState) } catch {}
 try { $r.routes = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0','0.0.0.0/1','128.0.0.0/1' -ErrorAction SilentlyContinue | Select-Object ifIndex, DestinationPrefix, RouteMetric, NextHop) } catch {}
+try {
+  $r.gw = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -and $_.NextHop -ne '0.0.0.0' } |
+    ForEach-Object { $n = Get-NetNeighbor -IPAddress $_.NextHop -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue | Select-Object -First 1
+      [ordered]@{ ifIndex = $_.ifIndex; mac = [string]$n.LinkLayerAddress } })
+} catch {}
 try { $r.dns = @(Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses.Count -gt 0 } | Select-Object InterfaceIndex, @{n='n';e={$_.ServerAddresses.Count}}) } catch {}
 try { $r.doh = @(Get-DnsClientDohServerAddress | Select-Object ServerAddress, AutoUpgrade) } catch {}
 try { $r.smhnr = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name DisableSmartNameResolution).DisableSmartNameResolution } catch {}
@@ -68,6 +73,7 @@ type psOut struct {
 	Adapters json.RawMessage `json:"adapters"`
 	IPIf     json.RawMessage `json:"ipif"`
 	Routes   json.RawMessage `json:"routes"`
+	GW       json.RawMessage `json:"gw"`
 	DNS      json.RawMessage `json:"dns"`
 	DoH      json.RawMessage `json:"doh"`
 	SMHNR    json.RawMessage `json:"smhnr"`
@@ -154,6 +160,17 @@ func parsePS(b []byte) (Facts, FileVersions, error) {
 		}
 	}
 	f.DefaultIfIndex = best
+	// MAC шлюза маршрута по умолчанию — отпечаток сети (роутер дома, телефон-модем): по нему
+	// сеанс узнаёт, что ПК в другой сети, без вопроса пользователю.
+	for _, r := range asList(o.GW) {
+		var x struct {
+			IfIndex int `json:"ifIndex"`
+			MAC     string
+		}
+		if json.Unmarshal(r, &x) == nil && x.IfIndex == best {
+			f.GatewayMAC = normMAC(x.MAC)
+		}
+	}
 	for _, r := range asList(o.DNS) {
 		var x struct{ N int }
 		if json.Unmarshal(r, &x) == nil {
@@ -265,6 +282,15 @@ func parseW32tm(s string) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+// normMAC — MAC в нижнем регистре без разделителей; пустой, нулевой или широковещательный — "".
+func normMAC(s string) string {
+	m := strings.ToLower(strings.NewReplacer("-", "", ":", "", " ", "").Replace(s))
+	if len(m) != 12 || m == "000000000000" || m == "ffffffffffff" {
+		return ""
+	}
+	return m
 }
 
 func atoi(s string) int {
