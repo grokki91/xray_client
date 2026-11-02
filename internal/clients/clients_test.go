@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,11 +154,34 @@ func TestScanTextPasted(t *testing.T) {
 	if !s.Pasted || s.Counts["real_cert"] != 1 || s.Counts["port_busy"] != 1 || len(s.Lines) != 2 {
 		t.Fatalf("%+v", s)
 	}
-	// Прямые проверки Hiddify — отдельно от таймаутов к серверу.
+	// Прямые проверки Hiddify — отдельно от таймаутов к серверу: их таймауты в «таймаут» не идут.
 	s = ScanText("WARN monitoring: outbound direct §hide§ URL test failed: (dial tcp 192.0.2.1:80: i/o timeout)\n" +
 		"WARN monitoring: outbound direct-fragment §hide§ URL test failed: (dial tcp 192.0.2.1:80: i/o timeout)\n" +
 		"ERROR outbound/vless[proxy]: dial tcp 198.51.100.7:443: i/o timeout")
-	if s.Counts["direct_failed"] != 2 || s.Counts["timeout"] != 3 {
+	if s.Counts["direct_failed"] != 2 || s.Counts["timeout"] != 1 {
 		t.Fatalf("%+v", s.Counts)
+	}
+}
+
+// Скрин 7: в логе Hiddify — поток таймаутов прямого DNS (сайты по правилу «напрямую») и EOF
+// соединений через сервер. Было «таймаут ×372» — читалось как таймауты к серверу, а EOF к
+// серверу не считался вовсе. Строки через сервер — в начале и не вытесняются прямыми.
+func TestScanDirectVsServer(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("ERROR [11 5.0s] connection: open connection to www.example.org:443 using outbound/vless[srv]: EOF\n")
+	b.WriteString("WARN monitoring: outbound srv URL test failed: unexpected EOF\n")
+	b.WriteString("ERROR [12 0.1s] connection: open connection to www.example.org:443 using outbound/vless[srv]: wsarecv: An existing connection was forcibly closed by the remote host.\n")
+	b.WriteString("ERROR [13 0.2s] connection: open connection to www.example.org:443 using outbound/vless[srv]: x509: certificate is valid for a.example.net, not www.example.com\n")
+	for i := 0; i < 30; i++ {
+		b.WriteString("ERROR [21 10.0s] connection: open connection to widget.example.ru:443 using outbound/direct[direct §hide§]: " +
+			"lookup widget.example.ru: (exchange4: context deadline exceeded | exchange6: context deadline exceeded)\n")
+	}
+	b.WriteString("INFO [14] outbound/direct[direct §hide§]: outbound connection to www.example.ru:443\n")
+	s := ScanText(b.String())
+	if s.Counts["direct_failed"] != 30 || s.Counts["timeout"] != 0 || s.Counts["eof"] != 2 || s.Counts["reset"] != 1 || s.Counts["x509"] != 1 {
+		t.Fatalf("%+v", s.Counts)
+	}
+	if len(s.Lines) != 4+maxDirectLines || !strings.Contains(s.Lines[0], "vless[srv]: EOF") || !strings.Contains(s.Lines[4], "outbound/direct") {
+		t.Fatalf("строки: %d %q", len(s.Lines), s.Lines)
 	}
 }

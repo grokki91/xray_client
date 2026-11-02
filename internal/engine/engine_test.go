@@ -455,7 +455,7 @@ func TestSSHPortProbe(t *testing.T) {
 	r := probeRun(t, Options{SSHAlias: "xm-test"}, &profile.Profile{Address: "127.0.0.1", Port: 1})
 	var alias string
 	r.e.SSHPort = func(_ context.Context, a string) int { alias = a; return ssh.Port }
-	r.sshPort(context.Background(), ssh.IP)
+	r.sshPort(context.Background(), ssh.IP, false)
 	p6 := r.set.Get("P6")
 	if p6 == nil || !p6.Bool("reach") || !p6.Bool("banner") || !p6.Bool("known") || alias != "xm-test" {
 		t.Fatalf("P6: %+v, алиас %q", p6, alias)
@@ -469,7 +469,7 @@ func TestSSHPortProbe(t *testing.T) {
 	// SSH на том же порту, что сервер, — сравнивать не с чем: пробы нет.
 	r = probeRun(t, Options{SSHAlias: "xm-test"}, &profile.Profile{Address: "127.0.0.1", Port: ssh.Port})
 	r.e.SSHPort = func(context.Context, string) int { return ssh.Port }
-	r.sshPort(context.Background(), ssh.IP)
+	r.sshPort(context.Background(), ssh.IP, false)
 	if r.set.Has("P6") || r.budget.Usage().TotalTCP != 0 {
 		t.Fatal("P6 на порт сервера")
 	}

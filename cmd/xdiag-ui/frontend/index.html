@@ -83,6 +83,7 @@
               <p id="sWhy" class="swhy">Нажмите «Диагностировать». Приложение ничего не меняет в системе и клиентах.</p>
               <p id="sAlt" class="alt"></p>
               <div id="sMeta" class="meta"></div>
+              <ul id="sNeed" class="need" aria-label="Для точного ответа"></ul>
               <div class="hactions">
                 <button id="fix" class="primary" hidden>Как исправить <i data-icon="arrow"></i></button>
                 <button id="copy" class="ghost" hidden title="Текст отчёта без адресов, ключей и UUID"><i data-icon="copy"></i><span id="copyText">Копировать отчёт</span></button>
@@ -180,7 +181,8 @@
               <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Нужен вход на сервер по SSH-ключу.</p>
               <label class="field">Алиас из ~/.ssh/config
                 <span class="row nowrap">
-                  <input id="sAlias" placeholder="например xm-ui" spellcheck="false" autocomplete="off">
+                  <input id="sAlias" placeholder="например xm-ui" spellcheck="false" autocomplete="off" list="aliasList">
+                  <datalist id="aliasList"></datalist>
                   <button id="bCheck" class="ghost sm"><span class="btnspin" aria-hidden="true"></span><i data-icon="link"></i><span id="bCheckText">Проверить</span></button>
                 </span>
               </label>
@@ -191,7 +193,7 @@
               </label>
               <details class="more">
                 <summary>Что выполняется на сервере</summary>
-                <p>Только чтение: <code>sudo -n xm bridge facts</code>, <code>health</code>, <code>doctor</code>. Подключается системный ssh.exe с вашими ~/.ssh/config, ключом и known_hosts — xdiag их не читает и не хранит.</p>
+                <p>Только чтение: <code>sudo -n xm bridge facts</code>, <code>health</code>, <code>doctor</code>. Подключается системный ssh.exe с вашими ~/.ssh/config, ключом и known_hosts. Ключи и known_hosts xdiag не читает; из ~/.ssh/config — только строки Host, HostName, Port и Include: так он сам находит SSH сервера по адресу из профиля, даже без алиаса здесь. Ничего из этого не сохраняется.</p>
               </details>
             </div>
           </div>

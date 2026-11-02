@@ -142,6 +142,14 @@ func TestScenarios(t *testing.T) {
 		{"Hiddify подключён, URL проверки открывается", with(hiddify(), ev("C10", "listening", true, "outcome", "ok", "test_url_ok", true)), "ok.client", Confirmed},
 		// ОС.
 		{"системный прокси в никуда", with(v2rayn("chrome", true), ev("W6", "system_proxy", true, "proxy_local", true, "proxy_listening", false)), "os.proxy.dead", Likely},
+		// Скрин 7 (2026-11-02): Hiddify «Подключение…», порт сервера открыт, а и эталон с
+		// X25519MLKEM768, и обычный TLS с SNI профиля получили сертификат другого сайта — было
+		// «Без окна сервера причину не назвать», хотя профиль не от сервера по этому адресу.
+		{"скрин 7: чужой сертификат на адресе сервера, эталон отвергнут", with(append(screen7(), hiddify())...), "profile.stale", Likely},
+		{"скрин 7 и SSH сервера молчит", with(append(screen7(), hiddify(), ev("P6", "outcome", "timeout", "reach", false, "known", true))...), "profile.stale", Likely},
+		{"чужой сертификат, маску по её адресу не проверить", append([]evidence.Evidence{ev("N1", "ok", true), ev("N2", "ru_ok", true, "foreign_ok", true),
+			ev("N4", "ok", false, "stage", "dns"), ev("C3", "found", true)}, append(screen7(), hiddify())...), "unknown.need_window", None},
+		{"чужой сертификат, а мост говорит: SNI тот же", with(append(screen7(), hiddify(), ev("S1", "ok", true, "match_sni", true, "match_pbk", false))...), "profile.pbk", Confirmed},
 	}
 	for _, c := range cases {
 		v := e.Decide(evidence.FromList(c.evs))
@@ -289,6 +297,86 @@ func TestOtherNetworkSilentToo(t *testing.T) {
 	for _, a := range v.Main.Actions {
 		if strings.Contains(a, "из другой сети") {
 			t.Fatalf("совет про другую сеть после P5: %q", a)
+		}
+	}
+}
+
+// screen7 — улики скрина 7: Hiddify запущен и пишет «Подключение…», TCP до порта сервера есть,
+// эталон (fp chrome) получил сертификат маски, обычный TLS с SNI профиля — сертификат не того
+// сайта, маска по своему адресу открывается (N4 — в base()).
+func screen7() []evidence.Evidence {
+	return []evidence.Evidence{
+		ev("C10", "listening", true, "outcome", "fail", "error", "eof", "shows", "connecting"),
+		ev("P1", "outcome", "ok", "ms", 58),
+		ev("P3", "outcome", "real_cert"),
+		ev("P2", "outcome", "other_cert", "cert_valid", false),
+	}
+}
+
+// Скрин 7: главная причина — профиль не от сервера по этому адресу; «профиль не принят REALITY»
+// её не дублирует, Hiddify без X25519MLKEM768 — «возможно» (всплывёт после замены профиля), а
+// когда SSH сервера молчит, мост и окно сервера не советуются — вместо них веб-консоль (K1).
+func TestScreen7(t *testing.T) {
+	e, _ := Load()
+	v := e.Decide(evidence.FromList(append(append(base(), hiddify()), screen7()...)))
+	if v.Main.Code != "profile.stale" || v.Main.Alternative == "" || !strings.Contains(strings.Join(v.Main.Evidence, ","), "P2") {
+		t.Fatalf("вердикт %s/%s %v", v.Main.Code, v.Main.Level, v.Main.Evidence)
+	}
+	var possible []string
+	for _, r := range v.Possible {
+		possible = append(possible, r.Code)
+	}
+	if strings.Contains(strings.Join(possible, ","), "profile.reality") || !strings.Contains(strings.Join(possible, ","), "client.core.mlkem") {
+		t.Fatalf("возможные: %v", possible)
+	}
+	ids := func(cs []Check) string {
+		var out []string
+		for _, c := range cs {
+			out = append(out, c.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := ids(v.NextChecks); got != "S1,S3" {
+		t.Fatalf("проверки без SSH-пробы: %s", got)
+	}
+	for _, silent := range []evidence.Evidence{
+		ev("P6", "outcome", "timeout", "reach", false, "known", true),
+		ev("S0", "error", "unreachable", "ssh", "unreachable"),
+	} {
+		v = e.Decide(evidence.FromList(append(append(base(), hiddify(), silent), screen7()...)))
+		if got := ids(v.NextChecks); got != "K1" || ids(v.Main.NextChecks) != "K1" {
+			t.Fatalf("%s: SSH молчит — проверки %s / %s", silent.ID, got, ids(v.Main.NextChecks))
+		}
+		found := false
+		for _, f := range v.Findings {
+			found = found || f.Code == "server.ssh.silent"
+		}
+		if !found {
+			t.Fatalf("%s: нет находки server.ssh.silent", silent.ID)
+		}
+	}
+	// Порт 22 молчит, а свой порт SSH неизвестен — не довод: мост и окно остаются.
+	v = e.Decide(evidence.FromList(append(append(base(), hiddify(), ev("P6", "outcome", "timeout", "reach", false, "known", false)), screen7()...)))
+	if got := ids(v.NextChecks); got != "S1,S3" {
+		t.Fatalf("порт SSH неизвестен — проверки %s", got)
+	}
+	for _, f := range v.Findings {
+		if f.Code == "server.ssh.silent" {
+			t.Fatal("находка по порту 22 без алиаса")
+		}
+	}
+	// Без улик о SSH окно сервера в unknown не меняется, с молчащим SSH — веб-консоль.
+	u := e.Decide(evidence.FromList(append(base(), hiddify(), ev("P1", "outcome", "ok"), ev("P6", "reach", false, "known", true))))
+	if u.Main.Code != "unknown.need_window" || ids(u.Main.NextChecks) != "K1" {
+		t.Fatalf("unknown при молчащем SSH: %s %s", u.Main.Code, ids(u.Main.NextChecks))
+	}
+}
+
+func TestMissingTexts(t *testing.T) {
+	e, _ := Load()
+	for _, k := range []string{"ssh_port", "ssh_port22", "reference_off", "client_logs"} {
+		if e.MissingText(k) == "" {
+			t.Errorf("нет текста missing.%s", k)
 		}
 	}
 }

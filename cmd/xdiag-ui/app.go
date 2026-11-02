@@ -166,7 +166,8 @@ func (a *App) SetupStatus(f SettingsForm) (setup.Status, error) {
 	}
 	env := clients.DefaultEnv(nil, a.e.Rules.Compat)
 	env.RunVersion = nil // версия ядра v2rayN — дело диагностики, не формы
-	in := setup.Input{ProfileURI: uri, SSHAlias: f.Alias, HiddifyDir: f.HiddifyDir, V2rayNDir: f.V2rayNDir}
+	in := setup.Input{ProfileURI: uri, SSHAlias: f.Alias, HiddifyDir: f.HiddifyDir, V2rayNDir: f.V2rayNDir,
+		Aliases: bridge.ReadSSHConfig(bridge.DefaultSSHConfigPath()).Aliases()}
 	return setup.Check(a.ctx, in, env, func() error { _, err := exec.LookPath("ssh"); return err }), nil
 }
 

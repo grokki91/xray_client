@@ -213,14 +213,17 @@ function idleHero() {
   setWhy("Нажмите «Диагностировать». Приложение ничего не меняет в системе и клиентах.");
   $("sAlt").textContent = "";
   clear($("sMeta"));
+  clear($("sNeed"));
   $("fix").hidden = true;
   $("copy").hidden = true;
   renderChain(null, "idle");
   setConf("c-none", "shield", "—", "уверенность", "Появится после диагностики.");
 }
 
-function setWhy(text) {
-  const n = $("sWhy");
+function setWhy(text) { setRich($("sWhy"), text); }
+
+// setRich — текст с `командами` в <code> (только textContent, без разбора HTML).
+function setRich(n, text) {
   clear(n);
   String(text || "").split("`").forEach((part, i) => n.append(i % 2 ? el("code", null, part) : document.createTextNode(part)));
 }
@@ -355,6 +358,7 @@ function scanning(on) {
     setWhy("…");
     $("sAlt").textContent = "";
     clear($("sMeta"));
+    clear($("sNeed"));
     $("fix").hidden = true;
     $("copy").hidden = $("export").disabled = true;
     renderChain(null, "idle");
@@ -410,7 +414,7 @@ function renderSummary(v) {
   $("sHead").textContent = st.head;
   $("sTitle").textContent = v.title;
   setWhy(v.why);
-  $("sAlt").textContent = v.alternative ? "Альтернатива: " + v.alternative : "";
+  setRich($("sAlt"), v.alternative ? "Альтернатива: " + v.alternative : "");
 
   // Кольцо — доля пройденных звеньев цепочки «Интернет → Сервер → Профиль → Клиент».
   const stg = v.stages || [];
@@ -439,6 +443,15 @@ function renderSummary(v) {
     if (t.client) chip("", t.client + (t.state ? ": " + t.state : ""));
   }
 
+  // «Для точного ответа»: чего не хватило (настройка, логи) — только то, что изменило бы вывод.
+  const need = $("sNeed");
+  clear(need);
+  (v.need || []).forEach((t) => {
+    const li = el("li");
+    li.append(icon("bang"), rich("span", t));
+    need.append(li);
+  });
+
   const c = confFor(v, st);
   setConf(c[0], c[1], c[2], c[3], c[4]);
   $("fix").hidden = !(v.actions || []).length;
@@ -457,8 +470,8 @@ function renderVerdict(v) {
   });
   $("vActWrap").hidden = !list($("vActions"), v.actions, (a) => rich("li", a));
   $("vNextWrap").hidden = !list($("vNext"), v.next, (a) => rich("li", a));
-  $("vAlsoWrap").hidden = !list($("vAlso"), v.also);
-  $("vFindWrap").hidden = !list($("vFind"), v.findings);
+  $("vAlsoWrap").hidden = !list($("vAlso"), v.also, (a) => rich("li", a));
+  $("vFindWrap").hidden = !list($("vFind"), v.findings, (a) => rich("li", a));
   const nRuled = list($("vRuled"), v.ruled_out);
   $("vRuledWrap").hidden = !nRuled;
   $("vRuledWrap").open = false;
@@ -687,6 +700,10 @@ function renderStatus(st) {
   setStat($("stBridge"), b);
   setNote($("stBridgeNote"), b.note);
   $("bCheck").disabled = st.bridge.state === "off" || st.bridge.state === "bad";
+  // Варианты алиаса — имена Host из ~/.ssh/config (без адресов).
+  const dl = $("aliasList");
+  clear(dl);
+  (st.aliases || []).forEach((a) => { const o = document.createElement("option"); o.value = a; dl.append(o); });
 
   (st.clients || []).forEach((c) => {
     const tile = document.querySelector('.ctile[data-client="' + c.client + '"]');

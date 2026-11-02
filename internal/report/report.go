@@ -34,6 +34,7 @@ type View struct {
 	Evidence  []Line              `json:"evidence"`
 	Actions   []string            `json:"actions"`
 	Next      []string            `json:"next"`
+	Need      []string            `json:"need"` // «для точного ответа»: чего не хватило сеансу
 	RuledOut  []string            `json:"ruled_out"`
 	Also      []string            `json:"also"`
 	Findings  []string            `json:"findings"`
@@ -64,10 +65,11 @@ var sourceText = map[evidence.Source]string{
 func Build(s *engine.SessionData) View {
 	v := s.Verdict
 	m := v.Main
+	chain := stages(s, m)
 	vw := View{ID: s.ID, When: s.Started.Local().Format("02.01.2006 15:04"), Code: m.Code, Title: m.Title, Why: m.Why, Alt: m.Alternative,
 		Actions: m.Actions, Level: m.Level.Text(), LevelCode: string(m.Level), Where: whereText(m), Problem: problemText(s, m),
-		Notes: s.Notes, Logs: s.Logs, Clients: s.Clients, Steps: s.Steps,
-		Status: status(s, m), Stages: stages(s, m), Target: target(s)}
+		Notes: s.Notes, Logs: s.Logs, Clients: s.Clients, Steps: s.Steps, Need: s.Need,
+		Status: status(s, m, chain), Stages: chain, Target: target(s)}
 	if m.Level == rules.None {
 		vw.Level = "не определено"
 	}
@@ -210,6 +212,12 @@ func Text(v View) string {
 		w("Если не помогло:")
 		for _, n := range v.Next {
 			w("  – %s", n)
+		}
+	}
+	if len(v.Need) > 0 {
+		w("Для точного ответа:")
+		for _, n := range v.Need {
+			w("  ! %s", n)
 		}
 	}
 	if len(v.Also) > 0 {

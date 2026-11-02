@@ -187,3 +187,78 @@ func TestLatencyIndicatorOnly(t *testing.T) {
 		t.Fatalf("итог %s: %+v, %q", v.Code, v.Status, v.Problem)
 	}
 }
+
+// Скрин 7: итог не спорит с цепочкой. Было: «Причина не найдена» при красном звене «Профиль» и
+// голое «— следствие» у клиента. Теперь причина названа, звено «Сервер» показывает молчащий SSH,
+// клиент — следствие чего, «Если не помогло» — веб-консоль вместо недоступных отсюда моста и окна.
+func TestScreen7Report(t *testing.T) {
+	e, _ := rules.Load()
+	evs := []evidence.Evidence{
+		{ID: "N1", Facts: map[string]any{"ok": true, "hosts_ok": 3.0, "hosts": 4.0}},
+		{ID: "N4", Facts: map[string]any{"ok": true}},
+		{ID: "C3", Facts: map[string]any{"found": true}},
+		{ID: "CX", Facts: map[string]any{"client": "hiddify", "client_name": "Hiddify 4.1.1", "core": "hiddify-sing-box", "core_mlkem": false}},
+		{ID: "C10", Facts: map[string]any{"listening": true, "outcome": "fail", "error": "eof", "shows": "connecting"}},
+		{ID: "P1", Facts: map[string]any{"outcome": "ok", "ms": 58.0}},
+		{ID: "P3", Facts: map[string]any{"outcome": "real_cert"}, Summary: "сервер отдал сайт-маску: REALITY не узнал клиента"},
+		{ID: "P2", Facts: map[string]any{"outcome": "other_cert"}, Summary: "сертификат получен, но не подходит к SNI маски"},
+	}
+	build := func(extra ...evidence.Evidence) View {
+		set := evidence.FromList(append(append([]evidence.Evidence{}, evs...), extra...))
+		return Build(&engine.SessionData{ID: "20261102-181002-abcd", Started: time.Now(), Client: "hiddify", ClientName: "Hiddify 4.1.1",
+			Evidence: set.All(), Verdict: e.Decide(set), Need: []string{e.MissingText("client_logs")}})
+	}
+	stage := func(v View, key string) Stage {
+		for _, st := range v.Stages {
+			if st.Key == key {
+				return st
+			}
+		}
+		t.Fatalf("нет звена %s", key)
+		return Stage{}
+	}
+	v := build()
+	if v.Code != "profile.stale" || v.Status.Head != "Не работает: причина в профиле" {
+		t.Fatalf("итог: %s %+v", v.Code, v.Status)
+	}
+	if c := stage(v, "client"); c.State != "skip" || !strings.HasSuffix(c.Note, "— следствие: сервер не принял профиль") {
+		t.Fatalf("клиент: %+v", c)
+	}
+	if s := stage(v, "server"); s.State != "ok" {
+		t.Fatalf("сервер без улик о SSH: %+v", s)
+	}
+	txt := Text(v)
+	for _, want := range []string{"Также найдено:", "X25519MLKEM768", "Для точного ответа:", "Логи клиента не найдены", "sudo xm bridge on"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("нет %q в\n%s", want, txt)
+		}
+	}
+	v = build(evidence.Evidence{ID: "P6", Facts: map[string]any{"outcome": "timeout", "reach": false, "known": true}})
+	if s := stage(v, "server"); s.State != "warn" || !strings.Contains(s.Note, "SSH недоступен") {
+		t.Fatalf("сервер при молчащем SSH: %+v", s)
+	}
+	txt = Text(v)
+	if !strings.Contains(txt, "веб-консоль") || strings.Contains(txt, "sudo xm bridge on") || !strings.Contains(txt, "SSH сервера отсюда недоступен") {
+		t.Fatalf("SSH молчит — советы:\n%s", txt)
+	}
+}
+
+// Причина не названа, но звено красное — итог «не работает» с этим звеном, а не «причина не найдена».
+func TestStatusUnknownWithFailedStage(t *testing.T) {
+	e, _ := rules.Load()
+	set := evidence.FromList([]evidence.Evidence{
+		{ID: "N1", Facts: map[string]any{"ok": true}},
+		{ID: "C3", Facts: map[string]any{"found": true}},
+		{ID: "P1", Facts: map[string]any{"outcome": "ok", "ms": 40.0}},
+		{ID: "P3", Facts: map[string]any{"outcome": "real_cert"}},
+	})
+	v := Build(&engine.SessionData{ID: "20261102-120000-abcd", Started: time.Now(), Evidence: set.All(), Verdict: e.Decide(set)})
+	if !strings.HasPrefix(v.Code, "unknown") || v.Status.Kind != "problem" || v.Status.Head != "Не работает: сбой на звене «Профиль»" {
+		t.Fatalf("%s %+v", v.Code, v.Status)
+	}
+	set = evidence.FromList([]evidence.Evidence{{ID: "N1", Facts: map[string]any{"ok": true}}, {ID: "C3", Facts: map[string]any{"found": true}}})
+	v = Build(&engine.SessionData{ID: "20261102-120001-abcd", Started: time.Now(), Evidence: set.All(), Verdict: e.Decide(set)})
+	if v.Status.Kind != "unknown" {
+		t.Fatalf("без красного звена: %+v", v.Status)
+	}
+}

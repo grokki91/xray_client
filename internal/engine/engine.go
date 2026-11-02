@@ -108,6 +108,9 @@ type Engine struct {
 	ProbeClient func(ctx context.Context, port int, probe204, download string, limit int, testURL string) netprobe.ClientResult
 	// SSHPort — порт SSH алиаса (`ssh -G`, без подключения); 0 — не узнать, P6 берёт 22.
 	SSHPort func(ctx context.Context, alias string) int
+	// SSHConfig — ~/.ssh/config (только Host/HostName/Port/Include): алиас сервера по адресу
+	// профиля, если в настройках его нет. nil — не искать (тесты).
+	SSHConfig func() *bridge.SSHConfig
 
 	mu      sync.Mutex
 	running bool
@@ -160,6 +163,7 @@ func New(st *store.Store) (*Engine, error) {
 		}
 		return s.Port(ctx)
 	}
+	e.SSHConfig = func() *bridge.SSHConfig { return bridge.ReadSSHConfig(bridge.DefaultSSHConfigPath()) }
 	return e, nil
 }
 
@@ -178,6 +182,7 @@ type SessionData struct {
 	Verdict      rules.Verdict       `json:"verdict"`
 	Steps        []Step              `json:"steps"`
 	Notes        []string            `json:"notes,omitempty"`
+	Need         []string            `json:"need,omitempty"` // «для точного ответа»: чего не хватило там, где это изменило бы вывод (taxonomy.yaml: missing)
 	Logs         []string            `json:"logs,omitempty"` // характерные строки (уже без секретов)
 	Budget       netprobe.Usage      `json:"budget"`
 	Bridge       string              `json:"bridge"`
@@ -236,6 +241,20 @@ type run struct {
 
 	budget      *netprobe.Budget // бюджет сервера профиля (фаза 2)
 	budgetStart netprobe.Usage   // расход на начало сеанса — в отчёт идёт разница
+
+	need []string // коды taxonomy.yaml: missing — чего не хватило (в порядке появления)
+}
+
+// missing — сеансу не хватило настройки или данных, и это изменило бы вывод.
+func (r *run) missing(code string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.need {
+		if c == code {
+			return
+		}
+	}
+	r.need = append(r.need, code)
 }
 
 type clientRun struct {
@@ -365,6 +384,17 @@ func (r *run) confirm(ctx context.Context, c Consent) bool {
 func (r *run) finish() {
 	v := r.e.Rules.Decide(r.set)
 	r.sess.Verdict = v
+	// Логи клиента нужны, когда он запущен и не работает: в них — его собственная ошибка.
+	if c10 := r.set.Get("C10").Str("outcome"); (c10 == "fail" || c10 == "freeze") && !r.set.Get("C6").Bool("found") {
+		r.missing("client_logs")
+	}
+	if !strings.HasPrefix(v.Main.Code, "ok") {
+		for _, code := range r.need {
+			if t := r.e.Rules.MissingText(code); t != "" && len(r.sess.Need) < 3 {
+				r.sess.Need = append(r.sess.Need, t)
+			}
+		}
+	}
 	r.sess.Evidence = r.set.All()
 	r.sess.Finished = r.now()
 	if r.budget != nil {
