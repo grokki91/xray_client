@@ -280,42 +280,6 @@ func (r *run) phaseCapture(ctx context.Context) {
 	r.step(4, "C7", "Захват ClientHello (pktmon)", "ok", sum)
 }
 
-// mergeOtherNetwork — P5: пробы этого сеанса сделаны из другой сети; база — улики прошлого
-// сеанса (из «своей» сети), к ним добавляется сравнение.
-func (r *run) mergeOtherNetwork() {
-	cur := r.set
-	prev := evidence.FromList(r.o.Prev.Evidence)
-	f := map[string]any{"ran": true, "network_changed": true}
-	parts := []string{}
-	if e := cur.Get("P1"); e != nil {
-		f["p1"] = e.Str("outcome")
-		parts = append(parts, "TCP — "+e.Str("outcome"))
-	}
-	if e := cur.Get("P2"); e != nil {
-		f["p2"] = e.Str("outcome")
-		parts = append(parts, "TLS — "+e.Str("outcome"))
-	}
-	if e := cur.Get("P3"); e != nil {
-		f["p3"] = e.Str("outcome")
-		parts = append(parts, "эталон — "+e.Str("outcome"))
-	}
-	merged := evidence.NewSet()
-	for _, e := range prev.All() {
-		if e.ID != "P5" {
-			merged.Put(e)
-		}
-	}
-	// Клиент и Windows — свежие: они от сети не зависят.
-	for _, e := range cur.All() {
-		if strings.HasPrefix(e.ID, "C") || strings.HasPrefix(e.ID, "W") || strings.HasPrefix(e.ID, "S") {
-			merged.Put(e)
-		}
-	}
-	r.set = merged
-	r.put(evidence.Evidence{ID: "P5", Source: evidence.FromNetwork, Reliability: evidence.High, Facts: f,
-		Summary: "Из другой сети: " + strings.Join(parts, ", ")})
-}
-
 // Titles — названия проверок (матрица §6).
 var Titles = map[string]string{
 	"C1": "Hiddify: версия и ядро", "C2": "v2rayN: версия и ядро", "CX": "Ядро активного клиента", "C3": "Профиль",

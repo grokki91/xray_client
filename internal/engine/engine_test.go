@@ -300,10 +300,10 @@ func clientEngine(t *testing.T, s *sim.Sim, works bool) (*Engine, func()) {
 	hiddifyDirPort(t, s, root, px.Port)
 	e := testEngine(t, s, root)
 	e.LocalOpen = func(port int) bool { return port == px.Port }
-	e.ProbeClient = func(ctx context.Context, port int, u204, down string, n int) netprobe.ClientResult {
+	e.ProbeClient = func(ctx context.Context, port int, u204, down string, n int, test string) netprobe.ClientResult {
 		c, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		return netprobe.ProbeViaClient(c, port, u204, down, n)
+		return netprobe.ProbeViaClient(c, port, u204, down, n, test)
 	}
 	return e, px.Close
 }
@@ -328,7 +328,8 @@ func TestClientConnectedWorks(t *testing.T) {
 	if sess.Verdict.Main.Code != "ok.client" || sess.Verdict.Main.Level != rules.Confirmed {
 		t.Fatalf("вердикт %s/%s", sess.Verdict.Main.Code, sess.Verdict.Main.Level)
 	}
-	if c := evFacts(t, sess, "C10"); c["outcome"] != "ok" || c["bytes"].(float64) < 65536 {
+	// URL проверки Hiddify (connection-test-url) через его прокси открылся — на кнопке «Подключено».
+	if c := evFacts(t, sess, "C10"); c["outcome"] != "ok" || c["bytes"].(float64) < 65536 || c["test_url_ok"] != true || c["shows"] != "connected" {
 		t.Fatalf("C10: %v", c)
 	}
 	if sess.Secret == nil || sess.Secret.Name != "сервер" {
@@ -359,8 +360,11 @@ func TestClientConnectingFails(t *testing.T) {
 	if v.Code != "client.core.mlkem" || v.Level != rules.Confirmed || !strings.Contains(strings.Join(v.Evidence, ","), "C10") {
 		t.Fatalf("вердикт %s/%s %v", v.Code, v.Level, v.Evidence)
 	}
-	if c := evFacts(t, sess, "C10"); c["outcome"] != "fail" || c["error"] != "timeout" {
+	if c := evFacts(t, sess, "C10"); c["outcome"] != "fail" || c["error"] != "timeout" || c["shows"] != "connecting" {
 		t.Fatalf("C10: %v", c)
+	}
+	if c8 := sess.Evidence[slices.IndexFunc(sess.Evidence, func(e evidence.Evidence) bool { return e.ID == "C8" })]; !strings.Contains(c8.Summary, "ядро запущено") {
+		t.Fatalf("C8 при «Подключение…»: %q", c8.Summary)
 	}
 	// P3m нашёл причину — шаг помечен как найденная проблема, а не «!».
 	for _, st := range steps {
@@ -489,6 +493,87 @@ func TestSNIElsewhere(t *testing.T) {
 		n5 := r.set.Get("N5")
 		if n5 == nil || n5.Bool("passed") != c.passed {
 			t.Fatalf("%s: N5 %+v", c.url, n5)
+		}
+	}
+}
+
+// Скрин 6: «Я в другой сети» без галочки. Сеанс узнаёт другую сеть по шлюзу и сравнивает пробы с
+// последним сеансом к тому же серверу оттуда; та же сеть, другой сервер или давний сеанс — не
+// сравниваются, а улики этого сеанса не подменяются прошлыми.
+func TestOtherNetworkAuto(t *testing.T) {
+	prof := &profile.Profile{Address: "203.0.113.7", Port: 8443}
+	netA := osw.Facts{Collected: true, GatewayMAC: "02005e000001"}
+	netB := osw.Facts{Collected: true, GatewayMAC: "02005e000002"}
+	start := time.Now()
+	cases := []struct {
+		name  string
+		prev  osw.Facts
+		age   time.Duration
+		addr  string
+		wantP bool
+	}{
+		{"другая сеть", netA, 2 * time.Minute, prof.Address, true},
+		{"та же сеть", netB, 2 * time.Minute, prof.Address, false},
+		{"другой сервер", netA, 2 * time.Minute, "203.0.113.8", false},
+		{"слишком давно", netA, otherNetworkWindow + time.Minute, prof.Address, false},
+	}
+	for _, c := range cases {
+		r := probeRun(t, Options{}, prof)
+		r.facts, r.sess.Started = netB, start
+		prev := &SessionData{ID: store.NewID(start.Add(-c.age), 1), Started: start.Add(-c.age),
+			Secret: &Secret{Server: c.addr, Port: prof.Port, Network: networkKey(&c.prev)},
+			Evidence: []evidence.Evidence{
+				{ID: "N1", Facts: map[string]any{"ok": true}},
+				{ID: "P1", Facts: map[string]any{"outcome": "timeout"}, At: start.Add(-c.age)},
+				{ID: "P6", Facts: map[string]any{"reach": false, "known": true}},
+			}}
+		if err := r.e.Save(prev); err != nil {
+			t.Fatal(err)
+		}
+		r.put(evidence.Evidence{ID: "N1", Facts: map[string]any{"ok": true, "hosts_ok": 3}})
+		r.put(evidence.Evidence{ID: "P1", Facts: map[string]any{"outcome": "timeout"}})
+		r.otherNetwork()
+		p5 := r.set.Get("P5")
+		if (p5 != nil) != c.wantP {
+			t.Fatalf("%s: P5 %+v", c.name, p5)
+		}
+		if p5 == nil {
+			continue
+		}
+		if p5.Str("p1") != "timeout" || p5.Str("p6") != "silent" || !strings.Contains(p5.Summary, "2 мин назад") ||
+			!strings.Contains(p5.Summary, "так же, как из этой сети") || !r.sess.OtherNetwork {
+			t.Fatalf("%s: P5 %+v", c.name, p5)
+		}
+		// Свои улики остались своими: N1 этого сеанса, а не прошлого.
+		if n, _ := r.set.Get("N1").Num("hosts_ok"); n != 3 {
+			t.Fatalf("%s: N1 подменён прошлым сеансом", c.name)
+		}
+		if v := r.e.Rules.Decide(r.set); v.Main.Code != "server.unreachable" {
+			t.Fatalf("%s: вердикт %s", c.name, v.Main.Code)
+		}
+	}
+	// Без отпечатка сети (факты Windows не собраны) сравнивать не с чем.
+	if networkKey(&osw.Facts{}) != "" || networkKey(&netA) == networkKey(&netB) {
+		t.Fatal("отпечаток сети")
+	}
+}
+
+// Что на кнопке Hiddify 4.x: ядро запущено, а тест задержки не проходит — «Подключение…»; ответ
+// не 204 — тест задержки Hiddify его принимает, по C10 не определить.
+func TestHiddifyShows(t *testing.T) {
+	yes, no := true, false
+	for _, c := range []struct {
+		r    netprobe.ClientResult
+		want string
+	}{
+		{netprobe.ClientResult{Outcome: "fail", Error: "eof"}, "connecting"},
+		{netprobe.ClientResult{Outcome: "fail", Error: "status"}, ""},
+		{netprobe.ClientResult{Outcome: "ok", TestOK: &no}, "connecting"},
+		{netprobe.ClientResult{Outcome: "ok", TestOK: &yes}, "connected"},
+		{netprobe.ClientResult{Outcome: "ok"}, ""},
+	} {
+		if got := hiddifyShows(c.r); got != c.want {
+			t.Errorf("%+v: %q, ожидалось %q", c.r, got, c.want)
 		}
 	}
 }

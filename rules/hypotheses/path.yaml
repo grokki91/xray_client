@@ -16,6 +16,8 @@
   actions: ["Конфигом не лечится: рабочего публичного обхода белых списков нет", "Проверить из другой сети (Wi-Fi ↔ мобильная)"]
   next_checks: [P5]
 
+# Из другой сети тоже тишина (P5) — дело не в этой сети: вердикт — server.unreachable, а эта
+# гипотеза («режет путь этой сети») не поднимается даже до «возможно».
 - code: path.ip.unreachable
   gate: ["N1.ok=true"]
   confirmed:
@@ -23,18 +25,18 @@
     - ["P1.outcome=timeout", "S3.code=net.nosyn", "C7.syn_seen=true"]
     - ["S3.code=net.synack", "S3.ssh=true"]
   likely:
-    - ["P1.outcome=timeout", "P4.tcp=timeout"]
-    - ["P1.outcome=timeout", "S0.ssh=unreachable"]
-    - ["P1.outcome=timeout", "P6.reach=false", "P6.known=true"]
+    - ["P1.outcome=timeout", "P4.tcp=timeout", "!P5.p1=timeout|unreachable"]
+    - ["P1.outcome=timeout", "S0.ssh=unreachable", "!P5.p1=timeout|unreachable"]
+    - ["P1.outcome=timeout", "P6.reach=false", "P6.known=true", "!P5.p1=timeout|unreachable"]
   possible:
-    - ["P1.outcome=timeout|unreachable"]
+    - ["P1.outcome=timeout|unreachable", "!P5.p1=timeout|unreachable"]
   # SSH того же адреса отвечает — адрес доступен: это server.port.drop / path.port.
   excluded: ["P1.outcome=ok", "S3.own=true", "N2.foreign_ok=false", "C10.outcome=ok", "P6.reach=true", "S0.ssh=ok"]
   title: "Адрес сервера недоступен: TCP до порта сервера не устанавливается"
   why: "Интернет есть (эталонные сайты открываются), а TCP-соединение с портом сервера не устанавливается ни с первой попытки, ни с повтора через 30 секунд."
-  alternative: "Это похоже на блокировку адреса по пути, но то же даёт бан IP хостера, белый список мобильной сети или файрвол роутера. Различить — повтором из другой сети."
+  alternative: "Это похоже на блокировку адреса в сети провайдера, но то же даёт выключенный сервер, бан IP хостера, белый список мобильной сети или файрвол роутера. Различить — повтором из другой сети."
   actions:
-    - "Проверить из другой сети (Wi-Fi ↔ мобильный интернет): там работает — режет сеть, не сервер"
+    - "Переключиться на другую сеть (Wi-Fi ↔ мобильный интернет) и снова нажать «Диагностировать»: xdiag сам сравнит сети. Там работает — режет сеть, не сервер"
     - "Конфигом не лечится: бан адреса/ASN — запасной сервер у другого хостера"
     - "Перед повтором подождать 2 минуты: частые попытки сами похожи на шторм"
   next_checks: [P5, S3]

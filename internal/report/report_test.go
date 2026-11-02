@@ -132,3 +132,58 @@ func TestPortSilentSSHOpen(t *testing.T) {
 		t.Fatalf("P6 не в уликах: %v", ids)
 	}
 }
+
+// Скрин 6: Hiddify «Подключение…», порт и SSH молчат и из другой сети. Окно говорит словами
+// самого Hiddify, звено «Сервер» — что и другая сеть не помогла, причина — на сервере.
+func TestSilentFromTwoNetworks(t *testing.T) {
+	e, _ := rules.Load()
+	set := evidence.FromList([]evidence.Evidence{
+		{ID: "N1", Facts: map[string]any{"ok": true, "hosts_ok": 4.0, "hosts": 4.0}},
+		{ID: "CX", Facts: map[string]any{"client": "hiddify", "client_name": "Hiddify 4.1.1", "core": "hiddify-sing-box", "core_mlkem": false}},
+		{ID: "C3", Facts: map[string]any{"found": true}},
+		{ID: "C10", Facts: map[string]any{"listening": true, "outcome": "fail", "error": "eof", "shows": "connecting"}},
+		{ID: "P1", Facts: map[string]any{"outcome": "timeout"}},
+		{ID: "P6", Facts: map[string]any{"outcome": "timeout", "reach": false, "known": true}},
+		{ID: "P4", Facts: map[string]any{"tcp": "timeout"}},
+		{ID: "P5", Facts: map[string]any{"p1": "timeout", "p6": "silent", "age_min": 2.0}},
+	})
+	s := &engine.SessionData{ID: "20261102-120000-abcd", Started: time.Now(), Client: "hiddify", ClientName: "Hiddify 4.1.1",
+		Evidence: set.All(), Verdict: e.Decide(set), Secret: &engine.Secret{Server: "203.0.113.7", Port: 443}}
+	v := Build(s)
+	if v.Code != "server.unreachable" || v.Status.Head != "Не работает: причина на сервере" {
+		t.Fatalf("итог %s: %+v", v.Code, v.Status)
+	}
+	if srv := v.Stages[1]; srv.State != "fail" || srv.Note != "не отвечают ни порт, ни SSH — и из другой сети" {
+		t.Fatalf("звено «Сервер»: %+v", srv)
+	}
+	if cl := v.Stages[3]; !strings.Contains(cl.Note, "«Подключение…»") {
+		t.Fatalf("звено клиента: %+v", cl)
+	}
+	if v.Problem != "Hiddify 4.1.1 пишет «Подключение…»: ядро запущено, а трафик через сервер не идёт" ||
+		v.Target == nil || v.Target.State != "«Подключение…»: трафик не идёт" {
+		t.Fatalf("состояние Hiddify: %q / %+v", v.Problem, v.Target)
+	}
+	for _, a := range v.Actions {
+		if strings.Contains(a, "из другой сети") {
+			t.Fatalf("совет про другую сеть после сравнения: %q", a)
+		}
+	}
+}
+
+// Трафик через клиент идёт, а его URL проверки — нет: итог «работает», а не «не работает: за
+// тоннелем».
+func TestLatencyIndicatorOnly(t *testing.T) {
+	e, _ := rules.Load()
+	set := evidence.FromList([]evidence.Evidence{
+		{ID: "N1", Facts: map[string]any{"ok": true}},
+		{ID: "CX", Facts: map[string]any{"client": "hiddify", "client_name": "Hiddify 4.1.1"}},
+		{ID: "C3", Facts: map[string]any{"found": true}},
+		{ID: "C10", Facts: map[string]any{"listening": true, "outcome": "ok", "test_url_ok": false, "shows": "connecting"}},
+	})
+	s := &engine.SessionData{ID: "20261102-121000-abcd", Started: time.Now(), Client: "hiddify", ClientName: "Hiddify 4.1.1",
+		Evidence: set.All(), Verdict: e.Decide(set)}
+	v := Build(s)
+	if v.Code != "beyond.latency_url" || v.Status.Kind != "ok" || !strings.Contains(v.Problem, "хотя трафик через него идёт") {
+		t.Fatalf("итог %s: %+v, %q", v.Code, v.Status, v.Problem)
+	}
+}

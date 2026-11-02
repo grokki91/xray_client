@@ -363,8 +363,11 @@ func (r *run) clientTunnel(ctx context.Context) {
 		if cr.state.TunAdapter && r.facts.DefaultViaTUN {
 			port, via = 0, "tun"
 		} else {
-			r.put(evidence.Evidence{ID: "C10", Source: evidence.FromClient, Reliability: evidence.High,
-				Facts:   map[string]any{"listening": false, "outcome": "not_listening", "port": port},
+			f := map[string]any{"listening": false, "outcome": "not_listening", "port": port}
+			if cr.d.Client == "hiddify" {
+				f["shows"] = "off"
+			}
+			r.put(evidence.Evidence{ID: "C10", Source: evidence.FromClient, Reliability: evidence.High, Facts: f,
 				Summary: fmt.Sprintf("%s не подключён: локальный прокси :%d не слушает", name, port)})
 			r.step(1, "C10", title, "skip", "клиент не подключён")
 			return
@@ -372,10 +375,19 @@ func (r *run) clientTunnel(ctx context.Context) {
 	}
 	r.step(1, "C10", title, "run", "")
 	h := r.hosts()
-	res := r.e.ProbeClient(ctx, port, h.Tunnel.Probe204, h.Tunnel.Download, h.Tunnel.DownloadBytes)
+	res := r.e.ProbeClient(ctx, port, h.Tunnel.Probe204, h.Tunnel.Download, h.Tunnel.DownloadBytes, cr.d.TestURL)
 	f := map[string]any{"listening": true, "outcome": res.Outcome, "ms_204": res.Ms204, "bytes": res.Bytes, "via": via, "port": port}
 	if res.Error != "" {
 		f["error"] = res.Error
+	}
+	if res.TestOK != nil {
+		f["test_url_ok"] = *res.TestOK
+	}
+	shows := ""
+	if cr.d.Client == "hiddify" {
+		if shows = hiddifyShows(res); shows != "" {
+			f["shows"] = shows
+		}
 	}
 	where := fmt.Sprintf("через локальный прокси :%d", port)
 	if via == "tun" {
@@ -386,6 +398,10 @@ func (r *run) clientTunnel(ctx context.Context) {
 	case "ok":
 		sum = fmt.Sprintf("%s: трафик через клиент идёт (%s) — 204 за %d мс, скачано %d КБ", name, where, res.Ms204, res.Bytes/1024)
 		note, st = fmt.Sprintf("трафик идёт: 204 за %d мс", res.Ms204), "ok"
+		if res.TestOK != nil && !*res.TestOK {
+			sum += "; URL проверки задержки клиента через него не открывается"
+			note, st = note+", а URL проверки клиента — нет", "warn"
+		}
 	case "freeze":
 		sum = fmt.Sprintf("%s: через клиент 204 получен, но загрузка встала на %d КБ", name, res.Bytes/1024)
 		note, st = "загрузка встала", "warn"
@@ -393,8 +409,32 @@ func (r *run) clientTunnel(ctx context.Context) {
 		sum = fmt.Sprintf("%s запущен, но запрос через него не прошёл (%s): %s", name, where, clientErrText(res))
 		note, st = "трафик не идёт: "+clientErrText(res), "fail"
 	}
+	switch shows {
+	case "connecting":
+		sum += " — поэтому Hiddify пишет «Подключение…»: ядро запущено, а его тест задержки через сервер не проходит"
+	case "connected":
+		sum += " — Hiddify пишет «Подключено»"
+	}
 	r.put(evidence.Evidence{ID: "C10", Source: evidence.FromClient, Reliability: evidence.High, Facts: f, Summary: sum})
 	r.step(1, "C10", title, st, note)
+}
+
+// hiddifyShows — что сейчас на кнопке Hiddify 4.x. По исходнику hiddify-app
+// (lib/features/home/widget/connection_button.dart): ядро запущено (Connected), но тест задержки
+// выбранного сервера не дал результата (delay ≤ 0 или ≥ 65 000 мс) — кнопка жёлто-оливковая и
+// подписана «Подключение…», с задержкой — «Подключено». Тест — запрос к «URL проверки
+// соединения» через выбранный сервер; C10 повторяет его через локальный прокси Hiddify.
+// "" — не определить (ответ не 204: тест задержки Hiddify принимает любой ответ).
+func hiddifyShows(c netprobe.ClientResult) string {
+	switch {
+	case c.Outcome == "fail" && c.Error != "status":
+		return "connecting"
+	case c.TestOK != nil && !*c.TestOK:
+		return "connecting"
+	case c.TestOK != nil:
+		return "connected"
+	}
+	return ""
 }
 
 func clientErrText(c netprobe.ClientResult) string {

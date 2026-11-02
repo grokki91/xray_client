@@ -125,8 +125,10 @@ func (r *run) clientEvidence() {
 	r.put(evidence.Evidence{ID: "C8", Source: evidence.FromOS, Reliability: evidence.High, Facts: map[string]any{
 		"client_running": st.Running, "core_listening": st.CoreListening, "tun_adapter": st.TunAdapter, "service": st.Service,
 		"proxy_port": r.active.d.ProxyPort},
+		// «Ядро запущено», а не «подключён»: порт слушает и тогда, когда Hiddify пишет
+		// «Подключение…» — подключён ли он на деле, решает C10.
 		Summary: fmt.Sprintf("%s: %s (локальный прокси :%d %s), процесс %s%s", r.active.a.Title(),
-			yesno(st.CoreListening || st.TunAdapter, "подключён", "не подключён"), r.active.d.ProxyPort, yesno(st.CoreListening, "слушает", "не слушает"),
+			yesno(st.CoreListening || st.TunAdapter, "ядро запущено", "ядро не запущено"), r.active.d.ProxyPort, yesno(st.CoreListening, "слушает", "не слушает"),
 			proc, yesno(st.TunAdapter, ", адаптер TUN есть", ""))})
 	var exposed []string
 	for _, cr := range r.all {

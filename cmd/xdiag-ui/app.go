@@ -212,11 +212,10 @@ func (a *App) SetTheme(t string) error {
 
 // RunRequest — параметры запуска из окна.
 type RunRequest struct {
-	Client       string `json:"client"`
-	Bridge       bool   `json:"bridge"`
-	Capture      bool   `json:"capture"`
-	OtherNetwork bool   `json:"other_network"`
-	Offline      bool   `json:"offline"`
+	Client  string `json:"client"`
+	Bridge  bool   `json:"bridge"`
+	Capture bool   `json:"capture"`
+	Offline bool   `json:"offline"`
 }
 
 // Run — сеанс диагностики. Ход — событиями progress/budget/consent/window.
@@ -251,17 +250,6 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 	a.cancel = cancel
 	a.mu.Unlock()
 	defer cancel()
-	if req.OtherNetwork {
-		l := a.st.Sessions()
-		if len(l) == 0 {
-			return nil, errors.New("нет прошлого сеанса для сравнения: сначала обычная диагностика в своей сети")
-		}
-		prev, err := a.e.Load(l[0].ID)
-		if err != nil {
-			return nil, err
-		}
-		o.OtherNetwork, o.Prev = true, prev
-	}
 	hooks := engine.Hooks{
 		Progress: func(s engine.Step) { runtime.EventsEmit(a.ctx, "progress", s) },
 		Budget:   func(u netprobe.Usage) { runtime.EventsEmit(a.ctx, "budget", u) },

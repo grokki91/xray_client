@@ -118,6 +118,15 @@ func TestScenarios(t *testing.T) {
 			ev("P6", "outcome", "timeout", "reach", false, "known", true)), "path.ip.unreachable", Likely},
 		{"порт 22 молчит, SSH-порт неизвестен — не довод", with(hiddify(), ev("P1", "outcome", "timeout"),
 			ev("P6", "outcome", "timeout", "reach", false, "known", false)), "unknown.need_window", None},
+		// Скрин 6 (2026-11-02): порт и SSH молчат и из другой сети (другой город) — провайдер ни при
+		// чём; «проверьте из другой сети» больше не совет, а сделанная проверка.
+		{"скрин 6: порт и SSH молчат из двух сетей", with(hiddify(), ev("C10", "listening", true, "outcome", "fail", "error", "eof"),
+			ev("P1", "outcome", "timeout"), ev("P6", "outcome", "timeout", "reach", false, "known", true),
+			ev("P4", "tcp", "timeout", "tls", "tcp_timeout"), ev("P5", "p1", "timeout", "p6", "silent", "age_min", 2)), "server.unreachable", Likely},
+		{"порт молчит из двух сетей, SSH не проверен", with(hiddify(), ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout"),
+			ev("P5", "p1", "timeout", "age_min", 40)), "server.unreachable", Likely},
+		{"порт молчит из двух сетей, в той сети SSH отвечал", with(hiddify(), ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout"),
+			ev("P5", "p1", "timeout", "p6", "reach")), "server.port.drop", Confirmed},
 		{"hello режется, SNI маски режется и на чужом адресе", append([]evidence.Evidence{ev("N1", "ok", true), ev("N2", "ru_ok", true, "foreign_ok", true),
 			ev("N4", "ok", false, "stage", "hello_timeout"), ev("N5", "passed", false), ev("C3", "found", true)}, v2rayn("chrome", true),
 			ev("P1", "outcome", "ok"), ev("P2", "outcome", "hello_timeout")), "path.hello", Likely},
@@ -128,6 +137,9 @@ func TestScenarios(t *testing.T) {
 		{"клиент работает, а индикатор задержки — таймаут", with(v2rayn("chrome", true), ev("C10", "listening", true, "outcome", "ok"),
 			ev("P3", "outcome", "ok"), ev("B3", "tunnel_ok", false)), "beyond.latency_url", Likely},
 		{"клиент работает — таблица версий не спорит с фактом", with(hiddify(), ev("C10", "listening", true, "outcome", "ok")), "ok.client", Confirmed},
+		{"Hiddify «Подключение…», а трафик через него идёт: не открывается URL проверки", with(hiddify(),
+			ev("C10", "listening", true, "outcome", "ok", "test_url_ok", false)), "beyond.latency_url", Likely},
+		{"Hiddify подключён, URL проверки открывается", with(hiddify(), ev("C10", "listening", true, "outcome", "ok", "test_url_ok", true)), "ok.client", Confirmed},
 		// ОС.
 		{"системный прокси в никуда", with(v2rayn("chrome", true), ev("W6", "system_proxy", true, "proxy_local", true, "proxy_listening", false)), "os.proxy.dead", Likely},
 	}
@@ -252,5 +264,31 @@ func TestSNIFinding(t *testing.T) {
 	}
 	if find(ev("N5", "passed", true)) || find() {
 		t.Fatal("SNI на чужом адресе проходит или не проверен — находки нет")
+	}
+}
+
+// Из другой сети тоже тишина: «режет путь этой сети» не остаётся ни в «также найдено», ни в
+// «возможно», а совет «проверить из другой сети» не повторяется — проверка уже сделана.
+func TestOtherNetworkSilentToo(t *testing.T) {
+	e, _ := Load()
+	v := e.Decide(evidence.FromList(append(base(), hiddify(), ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout"),
+		ev("P6", "outcome", "timeout", "reach", false, "known", true), ev("P5", "p1", "timeout", "age_min", 2))))
+	if v.Main.Code != "server.unreachable" || v.Main.Alternative == "" || !strings.Contains(","+strings.Join(v.Main.Evidence, ",")+",", ",P6,") {
+		t.Fatalf("вердикт %s: %v", v.Main.Code, v.Main.Evidence)
+	}
+	for _, r := range append(append([]Result{}, v.Also...), v.Possible...) {
+		if r.Code == "path.ip.unreachable" {
+			t.Fatalf("path.ip.unreachable рядом с server.unreachable: %s", r.Level)
+		}
+	}
+	for _, c := range v.NextChecks {
+		if c.ID == "P5" {
+			t.Fatal("P5 предложена повторно")
+		}
+	}
+	for _, a := range v.Main.Actions {
+		if strings.Contains(a, "из другой сети") {
+			t.Fatalf("совет про другую сеть после P5: %q", a)
+		}
 	}
 }

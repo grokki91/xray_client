@@ -3,7 +3,7 @@
 //
 //	xdiag run [--client auto|hiddify|v2rayn] [--uri-stdin] [--offline] [--no-reference]
 //	          [--bridge | --ssh АЛИАС] [--live СЕК] [--import ФАЙЛ]… [--logs ФАЙЛ]
-//	          [--capture [--capture-secs СЕК]] [--other-network] [--json] [--yes] [--no-save]
+//	          [--capture [--capture-secs СЕК]] [--json] [--yes] [--no-save]
 //	xdiag history [list | show ID [--details] | export ID [--include-address] [--text] | delete ID | clear]
 //	xdiag data [path | show [--session ID]]
 //	xdiag settings [show | set КЛЮЧ ЗНАЧЕНИЕ | unset КЛЮЧ]
@@ -87,7 +87,6 @@ func usage() {
       --import ФАЙЛ              doctor.json / health.json с сервера (ручной режим)
       --logs ФАЙЛ                экспорт логов клиента (Hiddify: «Логи» → «Скопировать»)
       --capture                  захват ClientHello клиента (pktmon, запросит UAC)
-      --other-network            повтор из другой сети: сравнить с прошлым сеансом
       --json                     вывод — экспорт сеанса JSON (без секретов)
       --yes                      согласиться на всё без вопросов
   xdiag history                  история; show ID [--details]; export ID [--include-address] [--text]; delete ID; clear
@@ -129,7 +128,6 @@ func cmdRun(args []string) error {
 	logs := fs.String("logs", "", "")
 	capt := fs.Bool("capture", false, "")
 	captSecs := fs.Int("capture-secs", 60, "")
-	other := fs.Bool("other-network", false, "")
 	asJSON := fs.Bool("json", false, "")
 	yes := fs.Bool("yes", false, "")
 	noSave := fs.Bool("no-save", false, "")
@@ -147,7 +145,7 @@ func cmdRun(args []string) error {
 	}
 	o := engine.Options{Client: set.Client, ProfileURI: vault.ProfileURI, HiddifyDir: vault.HiddifyDir, V2rayNDir: vault.V2rayNDir,
 		Offline: *offline, Reference: set.Reference && !*noRef, LiveSeconds: set.LiveSeconds, Capture: *capt, CaptureSecs: *captSecs,
-		OtherNetwork: *other, SSHAlias: vault.SSHAlias} // алиас без моста — только порт SSH для P6
+		SSHAlias: vault.SSHAlias} // алиас без моста — только порт SSH для P6
 	if *client != "" {
 		o.Client = *client
 	}
@@ -184,18 +182,6 @@ func cmdRun(args []string) error {
 	}
 	if exe, err := os.Executable(); err == nil {
 		o.SelfExe = exe
-	}
-	if *other {
-		l := st.Sessions()
-		if len(l) == 0 {
-			return errors.New("--other-network: нет прошлого сеанса для сравнения")
-		}
-		prev, err := e.Load(l[0].ID)
-		if err != nil {
-			return err
-		}
-		o.Prev = prev
-		fmt.Fprintf(os.Stderr, "Сравнение с сеансом %s (%s). Убедитесь, что ПК сейчас в другой сети.\n", l[0].ID, l[0].Code)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
