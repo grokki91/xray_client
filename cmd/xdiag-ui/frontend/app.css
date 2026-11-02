@@ -208,6 +208,10 @@ textarea { resize: vertical; font-size: 12px; }
 .meta:empty { display: none; }
 .chip { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--card2); border: 1px solid var(--line); overflow-wrap: anywhere; }
 .chip .muted { margin-right: 4px; }
+.need { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; }
+.need:empty { display: none; }
+.need li { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.need li .i { flex: none; width: 14px; height: 14px; margin-top: 2px; color: var(--warn); }
 .hactions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
 .k-run .rarc { stroke: var(--accent); }
 .k-run .shead { color: var(--accent); }

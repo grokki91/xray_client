@@ -81,7 +81,16 @@ type LogSummary struct {
 	AgeMin int            `json:"age_min"` // давность последней записи
 	Lines  []string       `json:"-"`       // характерные строки — наружу только через redact
 	Pasted bool           `json:"pasted"`
+
+	direct []string // строки прямого выхода: в Lines — после остальных (mergeLines)
 }
+
+// Сколько характерных строк хранить: строки о соединениях через сервер важнее — прямые проверки
+// клиента (DNS, URL-тест мимо сервера) идут потоком и не должны их вытеснять.
+const (
+	maxLines       = 14
+	maxDirectLines = 6
+)
 
 // State — состояние клиента сейчас.
 type State struct {
@@ -116,15 +125,26 @@ var logPatterns = []struct {
 	{"reality_failed", regexp.MustCompile(`(?i)reality verification failed`)},
 	{"real_cert", regexp.MustCompile(`(?i)received real certificate`)},
 	{"invalid_conn", regexp.MustCompile(`(?i)processed invalid connection`)},
+	{"x509", regexp.MustCompile(`(?i)\bx509:`)},
+	{"eof", regexp.MustCompile(`\bEOF\b`)},
+	{"reset", regexp.MustCompile(`(?i)connection reset|forcibly closed|connection was aborted`)},
+	{"refused", regexp.MustCompile(`(?i)connection refused|actively refused`)},
 	{"timeout", regexp.MustCompile(`(?i)i/o timeout|context deadline exceeded|handshake timeout|timed out`)},
-	// Hiddify сам проверяет прямой выход (outbound direct/direct-fragment): это не сервер.
-	{"direct_failed", regexp.MustCompile(`(?i)outbound direct\S*\s[^\n]{0,40}(test failed|timeout|error)`)},
 	{"tun_error", regexp.MustCompile(`(?i)(configure|create|open|start)[^\n]{0,40}tun[^\n]{0,60}(error|fail)|wintun[^\n]{0,60}(error|fail)|tun device`)},
 	{"port_busy", regexp.MustCompile(`(?i)address already in use|only one usage of each socket address|bind: an attempt was made`)},
 	{"core_failed", regexp.MustCompile(`(?i)failed to (start|run) (the )?core|start service[^\n]{0,30}(error|fail)|core (process )?(exited|crashed)|panic:|createService - null`)},
 	{"empty_fp", regexp.MustCompile(`(?i)empty fingerprint`)},
 	{"dns_error", regexp.MustCompile(`(?i)(dns|lookup)[^\n]{0,60}(no such host|server misbehaving|refused|failed)`)},
 }
+
+// reDirect — строка о прямом выходе клиента, мимо сервера: «using outbound/direct[…]», монитор
+// Hiddify «outbound direct-fragment … URL test failed», DNS прямых соединений. Её таймауты и
+// ошибки DNS — не про сервер и считаются отдельно (direct_failed): иначе сотни таймаутов
+// прямого DNS читаются как «таймаут ×372» к серверу.
+var reDirect = regexp.MustCompile(`(?i)outbound[/ ]direct|dns[-/]direct`)
+
+// reFail — в строке прямого выхода есть сбой.
+var reFail = regexp.MustCompile(`(?i)\b(error|errors|fail|failed|failure|timeout|refused|reset|eof|unreachable)\b|deadline exceeded|timed out`)
 
 // ScanLogs читает хвосты файлов (до 512 КБ каждый) и считает характерные строки.
 func ScanLogs(files []string, now time.Time) LogSummary {
@@ -153,6 +173,7 @@ func ScanLogs(files []string, now time.Time) LogSummary {
 	if !newest.IsZero() {
 		s.AgeMin = int(now.Sub(newest).Minutes())
 	}
+	s.mergeLines()
 	return s
 }
 
@@ -160,14 +181,32 @@ func ScanLogs(files []string, now time.Time) LogSummary {
 func ScanText(text string) LogSummary {
 	s := LogSummary{Counts: map[string]int{}, Found: strings.TrimSpace(text) != "", Pasted: true}
 	scanText(strings.NewReader(text), &s)
+	s.mergeLines()
 	return s
 }
 
 func scanText(r io.Reader, s *LogSummary) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	keep := func(l []string, line string, max int) []string {
+		if len(line) > 300 {
+			line = line[:300] + "…"
+		}
+		l = append(l, line)
+		if len(l) > max {
+			l = l[1:]
+		}
+		return l
+	}
 	for sc.Scan() {
 		line := sc.Text()
+		if reDirect.MatchString(line) {
+			if reFail.MatchString(line) {
+				s.Counts["direct_failed"]++
+				s.direct = keep(s.direct, line, maxDirectLines)
+			}
+			continue
+		}
 		hit := false
 		for _, p := range logPatterns {
 			if p.re.MatchString(line) {
@@ -176,15 +215,15 @@ func scanText(r io.Reader, s *LogSummary) {
 			}
 		}
 		if hit {
-			if len(line) > 300 {
-				line = line[:300] + "…"
-			}
-			s.Lines = append(s.Lines, line)
-			if len(s.Lines) > 20 {
-				s.Lines = s.Lines[1:]
-			}
+			s.Lines = keep(s.Lines, line, maxLines)
 		}
 	}
+}
+
+// mergeLines — строки прямого выхода в конец Lines.
+func (s *LogSummary) mergeLines() {
+	s.Lines = append(s.Lines, s.direct...)
+	s.direct = nil
 }
 
 // ─── Папка из настроек ───────────────────────────────────────────────────────

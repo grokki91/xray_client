@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/grokki91/xray_client/internal/bridge"
 	"github.com/grokki91/xray_client/internal/evidence"
 	"github.com/grokki91/xray_client/internal/netprobe"
 	"github.com/grokki91/xray_client/internal/osw"
@@ -214,16 +215,19 @@ func (r *run) phase2(ctx context.Context) {
 	if p1.Outcome != "ok" {
 		r.step(2, "P3", refTitle, "skip", "не выполнялось: TCP до сервера не установился")
 		if p1.Outcome == "timeout" || p1.Outcome == "unreachable" {
-			r.sshPort(ctx, ip)
+			r.sshPort(ctx, ip, false)
 		}
 		r.repeat(ctx, addr)
 		return
 	}
 
+	clientOK := r.set.Get("C10").Str("outcome") == "ok"
 	if r.o.Reference && r.prof.IsRealityVLESS() {
 		if o := r.reference(ctx); o == "ok" || o == "budget" || ctx.Err() != nil {
 			return
 		}
+	} else if !r.o.Reference && !clientOK {
+		r.missing("reference_off")
 	}
 	r.step(2, "P2", "TLS к серверу с SNI маски", "run", "")
 	if !r.slot(ctx, netprobe.TLS, "P2", "TLS к серверу с SNI маски") {
@@ -236,6 +240,12 @@ func (r *run) phase2(ctx context.Context) {
 		Facts:   map[string]any{"outcome": p2o, "cert_valid": p2.CertValid, "ms": p2.Ms, "bytes_in": p2.BytesIn},
 		Summary: "Обычный TLS (fp chrome, SNI маски) на адрес сервера: " + tlsText(p2.Outcome, p2.CertValid)})
 	r.step(2, "P2", "TLS к серверу с SNI маски", stepStatus(p2o == "mask_cert"), tlsText(p2.Outcome, p2.CertValid))
+	// Эталон не прошёл и клиент не работает — вывод зависит от сервера: можно ли на него войти
+	// (свежий профиль, окно xm doctor) и жив ли адрес целиком. Только с известным портом SSH:
+	// порт 22 наугад при открытом порте сервера ничего не доказывает.
+	if !clientOK {
+		r.sshPort(ctx, ip, true)
+	}
 	if isHelloFail(p2o) {
 		r.repeat(ctx, addr)
 	}
@@ -243,19 +253,29 @@ func (r *run) phase2(ctx context.Context) {
 
 const refTitle = "Эталонное ядро Xray с профилем (fp chrome)"
 
-// sshPort — P6: порт сервера молчит — отвечает ли SSH-порт того же адреса. Отвечает — адрес не
-// заблокирован целиком, молчит только порт сервера (файрвол сервера или хостера, порт в
-// профиле, фильтр по порту). Порт SSH — из алиаса настроек (`ssh -G`, без подключения), иначе
-// 22; в улики он не пишется. Одно TCP в бюджете сервера, без пауз ради него.
-func (r *run) sshPort(ctx context.Context, ip net.IP) {
+// sshPort — P6: отвечает ли SSH-порт того же адреса. Порт сервера молчит (portOK=false) —
+// отвечает SSH: адрес не заблокирован целиком, молчит только порт сервера (файрвол сервера или
+// хостера, порт в профиле, фильтр по порту). Порт сервера открыт, а эталон не прошёл — можно ли
+// войти на сервер (свежий профиль, окно xm doctor): SSH молчит — мост и окно отсюда недоступны.
+// Порт SSH — из алиаса настроек или Host из ~/.ssh/config с адресом сервера (sshTarget), иначе
+// 22 (onlyKnown — тогда пробы нет); в улики порт и алиас не пишутся. Одно TCP в бюджете сервера,
+// без пауз ради него.
+func (r *run) sshPort(ctx context.Context, ip net.IP, onlyKnown bool) {
 	const title = "SSH-порт того же адреса"
-	port, known := 22, false
-	if r.o.SSHAlias != "" && r.e.SSHPort != nil {
-		if p := r.e.SSHPort(ctx, r.o.SSHAlias); p > 0 {
-			port, known = p, true
-		}
+	if r.set.Has("P6") || ctx.Err() != nil {
+		return
 	}
-	if port == r.prof.Port || ctx.Err() != nil {
+	port, src := r.sshTarget(ctx, ip)
+	known := src != ""
+	if !known {
+		if onlyKnown {
+			r.missing("ssh_port")
+			r.step(2, "P6", title, "skip", "порт SSH неизвестен: нет алиаса в «Настройках» и Host с адресом сервера в ~/.ssh/config")
+			return
+		}
+		port = 22
+	}
+	if port == r.prof.Port {
 		return
 	}
 	if !r.budget.Can(netprobe.TCP) {
@@ -265,9 +285,21 @@ func (r *run) sshPort(ctx context.Context, ip net.IP) {
 	r.step(2, "P6", title, "run", "")
 	t, banner := netprobe.ProbeBanner(ctx, r.dial, r.budget, net.JoinHostPort(ip.String(), strconv.Itoa(port)), "SSH-", 3*time.Second)
 	reach := t.Outcome == "ok" || t.Outcome == "refused"
-	what := yesno(known || port != 22, "SSH-порт", "Порт 22")
+	portOK := r.set.Get("P1").Str("outcome") == "ok"
+	what := map[string]string{"settings": "SSH-порт (алиас из «Настроек»)", "config": "SSH-порт (из ~/.ssh/config)"}[src]
+	if what == "" {
+		what = yesno(port != 22, "SSH-порт", "Порт 22")
+	}
 	var sum, note string
 	switch {
+	case portOK && t.Outcome == "ok" && banner:
+		sum, note = what+" того же адреса открыт (ответ SSH): на сервер можно войти", "открыт — на сервер можно войти"
+	case portOK && t.Outcome == "ok":
+		sum, note = what+" того же адреса: соединение есть, ответа SSH нет", "соединение есть, ответа SSH нет"
+	case portOK && t.Outcome == "refused":
+		sum, note = what+" того же адреса: отказ (RST) — SSH на этом порту не слушает", "отказ (RST) — SSH не слушает"
+	case portOK:
+		sum, note = what+" того же адреса: "+tcpText(t)+" — SSH молчит, хотя порт сервера отвечает", tcpText(t)+" — SSH молчит"
 	case t.Outcome == "ok" && banner:
 		sum, note = what+" того же адреса открыт (ответ SSH): адрес доступен, молчит только порт сервера", "открыт — адрес доступен"
 	case t.Outcome == "ok":
@@ -277,12 +309,69 @@ func (r *run) sshPort(ctx context.Context, ip net.IP) {
 	case known:
 		sum, note = what+" того же адреса: "+tcpText(t)+" — молчит весь адрес", tcpText(t)
 	default:
-		sum, note = what+" того же адреса: "+tcpText(t)+" (свой порт SSH — из алиаса в «Настройках»)", tcpText(t)
+		sum, note = what+" того же адреса: "+tcpText(t)+" (свой порт SSH — из алиаса в «Настройках» или ~/.ssh/config)", tcpText(t)
+	}
+	if !known && !reach {
+		r.missing("ssh_port22")
 	}
 	r.put(evidence.Evidence{ID: "P6", Source: evidence.FromNetwork, Reliability: evidence.High,
-		Facts:   map[string]any{"outcome": t.Outcome, "ms": t.Ms, "reach": reach, "banner": banner, "known": known},
+		Facts:   map[string]any{"outcome": t.Outcome, "ms": t.Ms, "reach": reach, "banner": banner, "known": known, "source": src},
 		Summary: sum})
-	r.step(2, "P6", title, yesno(reach, "ok", "warn"), note)
+	ok := reach
+	if portOK {
+		ok = t.Outcome == "ok"
+	}
+	r.step(2, "P6", title, yesno(ok, "ok", "warn"), note)
+}
+
+// sshTarget — порт SSH сервера и откуда он известен: "settings" — алиас из настроек (`ssh -G`,
+// без подключения), если он не про другой сервер; "config" — Host из ~/.ssh/config, у которого
+// HostName — адрес сервера (алиас в настройках задавать не обязательно); "" — неизвестен.
+func (r *run) sshTarget(ctx context.Context, ip net.IP) (int, string) {
+	var cfg *bridge.SSHConfig
+	if r.e.SSHConfig != nil {
+		cfg = r.e.SSHConfig()
+	}
+	addrs := []string{r.prof.Address, ip.String()}
+	if a := r.o.SSHAlias; a != "" {
+		other := false
+		if cfg != nil {
+			// HostName алиаса — другой IP: алиас настроек — от другого сервера, его порт не тот.
+			if h, _ := cfg.Resolve(a); net.ParseIP(strings.Trim(h, "[]")) != nil {
+				other = !sameAddr(h, addrs)
+			}
+		}
+		if !other {
+			if r.e.SSHPort != nil {
+				if p := r.e.SSHPort(ctx, a); p > 0 {
+					return p, "settings"
+				}
+			}
+			if cfg != nil {
+				_, p := cfg.Resolve(a)
+				return p, "settings"
+			}
+		}
+	}
+	if cfg == nil {
+		return 0, ""
+	}
+	// Найденный по адресу алиас в `ssh -G` не передаётся: им может быть сам IP сервера
+	// («Host 203.0.113.7»), а командная строка процесса видна всем (AGENTS.md). Порт — из разбора.
+	if _, p, ok := cfg.Find(addrs...); ok {
+		return p, "config"
+	}
+	return 0, ""
+}
+
+func sameAddr(h string, addrs []string) bool {
+	h = strings.ToLower(strings.Trim(h, "[]"))
+	for _, a := range addrs {
+		if strings.ToLower(strings.Trim(a, "[]")) == h {
+			return true
+		}
+	}
+	return false
 }
 
 // repeat — P4: один повтор через 30 с, если первая попытка не прошла (снимает единичную потерю).

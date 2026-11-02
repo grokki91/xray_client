@@ -43,6 +43,9 @@ type Input struct {
 	SSHAlias   string
 	HiddifyDir string
 	V2rayNDir  string
+	// Aliases — имена Host из ~/.ssh/config (bridge.SSHConfig.Aliases): подсказка к полю алиаса.
+	// Только имена — адреса и порты в окно не идут.
+	Aliases []string
 }
 
 // Client — клиент на этом ПК. Dir — локальный путь, только для окна (в отчёт не идёт).
@@ -60,11 +63,33 @@ type Status struct {
 	Profile Item     `json:"profile"`
 	Bridge  Item     `json:"bridge"`
 	Clients []Client `json:"clients"`
+	Aliases []string `json:"aliases,omitempty"` // варианты для поля алиаса
 }
 
 // Check — проверка без сети. lookSSH — есть ли ssh.exe (exec.LookPath; в тестах — подставной).
 func Check(ctx context.Context, in Input, env *clients.Env, lookSSH func() error) Status {
-	return Status{Profile: Profile(in.ProfileURI), Bridge: BridgeOffline(in.SSHAlias, lookSSH), Clients: Clients(ctx, env, in)}
+	b := BridgeOffline(in.SSHAlias, lookSSH)
+	if b.State == Off {
+		// SSH того же адреса диагностика проверяет и без алиаса — по Host с адресом сервера в
+		// ~/.ssh/config; алиас в настройках нужен мосту (факты с сервера).
+		b.Note = "SSH сервера диагностика проверяет и без него — по Host с адресом сервера в ~/.ssh/config. Для фактов с сервера (мост) выберите алиас"
+		if n := len(in.Aliases); n > 0 {
+			l := in.Aliases
+			if n > 5 {
+				l = l[:5]
+			}
+			b.Note += ": в ~/.ssh/config есть " + strings.Join(l, ", ") + yesNo(n > 5, " …", "")
+		}
+		b.Note += ". Без моста факты с сервера — импортом doctor.json (вкладка «Данные»)."
+	}
+	return Status{Profile: Profile(in.ProfileURI), Bridge: b, Clients: Clients(ctx, env, in), Aliases: in.Aliases}
+}
+
+func yesNo(c bool, a, b string) string {
+	if c {
+		return a
+	}
+	return b
 }
 
 // Profile — профиль из настроек так, как его возьмёт диагностика (profile.FindURIs).

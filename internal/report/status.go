@@ -41,7 +41,7 @@ var layerPhrase = map[string]string{
 	"L4": "на сервере", "L5": "в профиле", "L6": "за тоннелем",
 }
 
-func status(s *engine.SessionData, m rules.Result) Status {
+func status(s *engine.SessionData, m rules.Result, chain []Stage) Status {
 	switch {
 	case m.Kind == "ok" && m.Code == "ok.client":
 		return Status{"ok", "Всё работает"}
@@ -63,6 +63,13 @@ func status(s *engine.SessionData, m rules.Result) Status {
 		return Status{"incomplete", "Проверка остановлена"}
 	case m.Code == "unknown.budget":
 		return Status{"incomplete", "Проверка не завершена"}
+	}
+	// Причина не названа, а звено цепочки красное: «не работает» — наблюдение, не догадка; без
+	// этого итог «Причина не найдена» спорил бы с красным звеном под ним.
+	for _, x := range chain {
+		if x.State == "fail" {
+			return Status{"problem", "Не работает: сбой на звене «" + x.Title + "»"}
+		}
 	}
 	return Status{"unknown", "Причина не найдена"}
 }
@@ -127,6 +134,14 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 		srv.State, srv.Note = "fail", "ClientHello не проходит"
 	default:
 		srv.State, srv.Note = "ok", fmt.Sprintf("TCP есть (%d мс)", num("P1", "ms"))
+	}
+	// Порт сервера отвечает, а SSH того же адреса (порт из алиаса или ~/.ssh/config) — нет: на
+	// сервер отсюда не войти (свежий профиль, окно xm doctor) — это видно на звене.
+	if str("P1", "outcome") == "ok" && srv.State == "ok" {
+		p6 := set.Get("P6")
+		if (p6 != nil && p6.Bool("known") && (!p6.Bool("reach") || p6.Str("outcome") == "refused")) || str("S0", "ssh") == "unreachable" {
+			srv.State, srv.Note = "warn", srv.Note+"; SSH недоступен"
+		}
 	}
 
 	prof := Stage{Key: "profile", Title: "Профиль", State: "skip", Note: "не проверялся"}
@@ -214,10 +229,14 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 		}
 	}
 	// Красное — только там, где причина: клиент без связи с сервером «не работает» как
-	// следствие, а не как вторая поломка.
+	// следствие, а не как вторая поломка. Следствие чего — словами, а не голым «следствие».
 	for i := anchor + 1; anchor >= 0 && i < len(chain); i++ {
 		if chain[i].State == "fail" {
-			chain[i].State, chain[i].Note = "skip", chain[i].Note+" — следствие"
+			why := map[string]string{"net": "нет интернета", "server": "нет связи с сервером", "profile": "сервер не принял профиль"}[chain[anchor].Key]
+			if chain[anchor].Key == "profile" && set.Get("C3") != nil && !set.Get("C3").Bool("found") {
+				why = "нет профиля"
+			}
+			chain[i].State, chain[i].Note = "skip", chain[i].Note+" — следствие"+yes(why != "", ": "+why, "")
 		}
 	}
 	return []Stage{net, srv, prof, cl}

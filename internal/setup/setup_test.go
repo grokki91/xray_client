@@ -65,6 +65,21 @@ func TestBridgeOffline(t *testing.T) {
 	}
 }
 
+// Алиас не задан: в подсказке — имена Host из ~/.ssh/config (варианты для поля) и то, что SSH
+// сервера диагностика проверит и без алиаса.
+func TestCheckAliasSuggestions(t *testing.T) {
+	env := &clients.Env{TempDir: t.TempDir()}
+	st := Check(context.Background(), Input{Aliases: []string{"xm-ui", "vps"}}, env, func() error { return nil })
+	if st.Bridge.State != Off || !strings.Contains(st.Bridge.Note, "xm-ui, vps") || !strings.Contains(st.Bridge.Note, "без него") ||
+		len(st.Aliases) != 2 {
+		t.Fatalf("%+v", st)
+	}
+	st = Check(context.Background(), Input{SSHAlias: "xm-ui", Aliases: []string{"xm-ui"}}, env, func() error { return nil })
+	if st.Bridge.State != Idle || strings.Contains(st.Bridge.Note, "~/.ssh/config есть") {
+		t.Fatalf("алиас задан: %+v", st.Bridge)
+	}
+}
+
 type fakeBridge struct {
 	salt  string
 	facts *bridge.Facts

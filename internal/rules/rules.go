@@ -83,6 +83,17 @@ type Taxonomy struct {
 	Layers map[string]string   `yaml:"layers"`
 	Codes  map[string]CodeInfo `yaml:"codes"`
 	Checks map[string]string   `yaml:"checks"`
+	// Unavailable — проверка невозможна при условиях When (любая группа, внутри — «и»): вместо неё
+	// предлагается Instead (мост и окно сервера, когда SSH сервера молчит).
+	Unavailable map[string]Unavailable `yaml:"unavailable"`
+	// Missing — тексты «для точного ответа»: чего не хватило сеансу (условия — в engine).
+	Missing map[string]string `yaml:"missing"`
+}
+
+// Unavailable — когда проверка невозможна и чем её заменить.
+type Unavailable struct {
+	When    [][]string `yaml:"when"`
+	Instead string     `yaml:"instead"`
 }
 
 // Engine — загруженные правила.
@@ -138,6 +149,27 @@ func readYAML(fsys fs.FS, name string, v any) error {
 }
 
 func (e *Engine) validate() error {
+	for id, u := range e.Tax.Unavailable {
+		if _, ok := e.Tax.Checks[id]; !ok {
+			return fmt.Errorf("правила: unavailable: проверки %s нет в checks", id)
+		}
+		if _, ok := e.Tax.Checks[u.Instead]; !ok || u.Instead == id {
+			return fmt.Errorf("правила: unavailable %s: instead %q не из checks", id, u.Instead)
+		}
+		if _, chained := e.Tax.Unavailable[u.Instead]; chained {
+			return fmt.Errorf("правила: unavailable %s: замена %s сама заменяется", id, u.Instead)
+		}
+		if len(u.When) == 0 {
+			return fmt.Errorf("правила: unavailable %s без условий", id)
+		}
+		for _, g := range u.When {
+			for _, p := range g {
+				if err := checkPred(p); err != nil {
+					return fmt.Errorf("правила: unavailable %s: %w", id, err)
+				}
+			}
+		}
+	}
 	seen := map[string]bool{}
 	for _, h := range e.Hyps {
 		if _, ok := e.Tax.Codes[h.Code]; !ok {
@@ -256,9 +288,7 @@ func (e *Engine) evalOne(h Hypothesis, set *evidence.Set) Result {
 		for _, a := range h.Actions {
 			r.Actions = append(r.Actions, e.render(a, set))
 		}
-		for _, c := range h.NextChecks {
-			r.NextChecks = append(r.NextChecks, Check{ID: c, Text: e.Tax.Checks[c]})
-		}
+		r.NextChecks = e.checks(set, h.NextChecks...)
 	}
 	if !evidence.AllOf(set, h.Gate) {
 		return r
@@ -351,6 +381,30 @@ func (e *Engine) Decide(set *evidence.Set) Verdict {
 	return v
 }
 
+// checks — проверки по ID: невозможные сейчас (taxonomy.yaml: unavailable) заменены, без повторов.
+func (e *Engine) checks(set *evidence.Set, ids ...string) []Check {
+	var out []Check
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if u, ok := e.Tax.Unavailable[id]; ok {
+			for _, g := range u.When {
+				if evidence.AllOf(set, g) {
+					id = u.Instead
+					break
+				}
+			}
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, Check{ID: id, Text: e.Tax.Checks[id]})
+		}
+	}
+	return out
+}
+
+// MissingText — текст «для точного ответа» по коду (taxonomy.yaml: missing); "" — нет такого.
+func (e *Engine) MissingText(code string) string { return e.Tax.Missing[code] }
+
 // checkDone — проверка уже есть в уликах (повторно не предлагать).
 func (e *Engine) checkDone(set *evidence.Set, id string) bool {
 	switch id {
@@ -388,10 +442,10 @@ func (e *Engine) unknown(set *evidence.Set, possible []Result) Result {
 		r.Actions = []string{"Повторить диагностику через 1–5 минут; приложение само подождёт, если до свободного слота меньше минуты"}
 	case "unknown.need_window":
 		r.Why = "Со стороны ПК причина не видна: нужно посмотреть, что приходит на сервер в момент попытки клиента."
-		r.NextChecks = []Check{{"S3", e.Tax.Checks["S3"]}}
+		r.NextChecks = e.checks(set, "S3")
 	case "unknown.need_other_network":
 		r.Why = "Признаки указывают на сеть, но без сравнения с другой сетью блокировку от сбоя не отличить. Сравнение — без настроек: запустите диагностику ещё раз из другой сети, xdiag узнает её сам."
-		r.NextChecks = []Check{{"P5", e.Tax.Checks["P5"]}}
+		r.NextChecks = e.checks(set, "P5")
 	default:
 		r.Why = "Проверки не нашли причину."
 	}

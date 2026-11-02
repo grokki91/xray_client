@@ -152,21 +152,10 @@ func (r *run) clientEvidence() {
 		logs.Found, logs.Pasted = true, true
 	}
 	lf := map[string]any{"found": logs.Found, "files": logs.Files, "age_min": logs.AgeMin, "pasted": logs.Pasted}
-	var parts []string
-	keys := make([]string, 0, len(logs.Counts))
-	for k := range logs.Counts {
-		keys = append(keys, k)
+	for k, n := range logs.Counts {
+		lf[k] = n
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		lf[k] = logs.Counts[k]
-		parts = append(parts, fmt.Sprintf("%s ×%d", logTitles[k], logs.Counts[k]))
-	}
-	sum := "Логи клиента не найдены"
-	if logs.Found {
-		sum = "Логи клиента: " + yesno(len(parts) > 0, strings.Join(parts, ", "), "характерных ошибок нет")
-	}
-	r.put(evidence.Evidence{ID: "C6", Source: evidence.FromLog, Reliability: evidence.Medium, Facts: lf, Summary: sum})
+	r.put(evidence.Evidence{ID: "C6", Source: evidence.FromLog, Reliability: evidence.Medium, Facts: lf, Summary: logSummary(logs)})
 	for _, l := range logs.Lines {
 		r.sess.Logs = append(r.sess.Logs, r.red.String(l))
 	}
@@ -174,8 +163,57 @@ func (r *run) clientEvidence() {
 
 var logTitles = map[string]string{
 	"reality_failed": "reality verification failed", "real_cert": "received real certificate", "invalid_conn": "processed invalid connection",
+	"x509": "чужой сертификат (x509)", "eof": "соединение закрыто (EOF)", "reset": "обрыв (RST)", "refused": "отказ в соединении",
 	"timeout": "таймаут", "tun_error": "ошибка TUN", "port_busy": "порт занят", "core_failed": "ядро не запустилось",
 	"empty_fp": "пустой fingerprint", "dns_error": "ошибка DNS", "direct_failed": "сбой прямых проверок клиента (мимо сервера)",
+}
+
+// logApp — ошибки самого приложения клиента (ядро, порт, TUN, профиль), а не соединений.
+var logApp = map[string]bool{"core_failed": true, "port_busy": true, "tun_error": true, "empty_fp": true}
+
+// logSummary — C6 тремя группами: соединения через сервер, сам клиент, прямой выход мимо сервера
+// (DNS и URL-тесты клиента — их таймауты не про сервер). В группе — по убыванию числа.
+func logSummary(l clients.LogSummary) string {
+	if !l.Found {
+		return "Логи клиента не найдены"
+	}
+	var conn, app []string
+	keys := make([]string, 0, len(l.Counts))
+	for k, n := range l.Counts {
+		if n > 0 && k != "direct_failed" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if l.Counts[keys[i]] != l.Counts[keys[j]] {
+			return l.Counts[keys[i]] > l.Counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	for _, k := range keys {
+		t := logTitles[k]
+		if t == "" {
+			t = k
+		}
+		p := fmt.Sprintf("%s ×%d", t, l.Counts[k])
+		if logApp[k] {
+			app = append(app, p)
+		} else {
+			conn = append(conn, p)
+		}
+	}
+	direct := l.Counts["direct_failed"]
+	if len(conn)+len(app) == 0 && direct == 0 {
+		return "Логи клиента: характерных ошибок нет"
+	}
+	parts := []string{"через сервер — " + yesno(len(conn) > 0, strings.Join(conn, ", "), "ошибок нет")}
+	if len(app) > 0 {
+		parts = append(parts, "сам клиент — "+strings.Join(app, ", "))
+	}
+	if direct > 0 {
+		parts = append(parts, fmt.Sprintf("мимо сервера (прямые проверки и DNS клиента) — сбоев ×%d", direct))
+	}
+	return "Логи клиента: " + strings.Join(parts, "; ")
 }
 
 func modeText(m string) string {
