@@ -137,6 +137,8 @@ func testHosts(s *sim.Sim) *rules.Hosts {
 	h.Tunnel.Probe204 = s.URL("/generate_204")
 	h.Tunnel.Download = s.URL("/down?bytes=65536")
 	h.Tunnel.DownloadBytes = 65536
+	h.Tunnel.UDPDNS = s.DNS
+	h.Tunnel.UDPName = "www.example.com"
 	return h
 }
 
@@ -239,6 +241,39 @@ func TestProfileOnlyOK(t *testing.T) {
 	}
 	if sess.Verdict.Main.Code != "ok" || sess.Budget.TotalTLS != 1 {
 		t.Fatalf("%s/%s, бюджет %+v", sess.Verdict.Main.Code, sess.Verdict.Main.Level, sess.Budget)
+	}
+}
+
+// Issue #17: сервер режет UDP из тоннеля — итог «работает», находка beyond.udp, B4 без
+// лишнего TLS к серверу. С открытым UDP — B4.udp_ok=true и находки нет.
+func TestUDPThroughTunnel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("сетевой симулятор")
+	}
+	for _, block := range []bool{true, false} {
+		s, err := sim.StartWith(sim.Options{BlockUDP: block})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := testEngine(t, s, t.TempDir())
+		sess, err := e.Run(context.Background(), Options{Reference: true, Hosts: testHosts(s), ProfileURI: s.URI("chrome"), SkipRepeat: true}, Hooks{})
+		s.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b4 map[string]any
+		for _, x := range sess.Evidence {
+			if x.ID == "B4" {
+				b4 = x.Facts
+			}
+		}
+		found := false
+		for _, f := range sess.Verdict.Findings {
+			found = found || f.Code == "beyond.udp"
+		}
+		if sess.Verdict.Main.Code != "ok" || b4 == nil || b4["udp_ok"] != !block || found != block || sess.Budget.TotalTLS != 1 {
+			t.Fatalf("block=%v: %s, B4 %v, находка %v, бюджет %+v", block, sess.Verdict.Main.Code, b4, found, sess.Budget)
+		}
 	}
 }
 

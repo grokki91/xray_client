@@ -149,7 +149,7 @@ func (r *run) clientEvidence() {
 		lf[k] = n
 	}
 	sum := logSummary(logs)
-	// Хронология за сутки: эпизоды сбоев через сервер (решение 15) — по уже прочитанным логам.
+	// Хронология за сутки: эпизоды сбоев через сервер (решение 16) — по уже прочитанным логам.
 	r.tl = logs.Timeline(r.now(), r.now().Add(-24*time.Hour))
 	if r.tl.Stamped > 0 {
 		lf["episodes"], lf["recovered"] = len(r.tl.Episodes), r.tl.Recovered
