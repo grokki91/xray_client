@@ -11,6 +11,7 @@ import (
 
 	"github.com/grokki91/xray_client/internal/bridge"
 	"github.com/grokki91/xray_client/internal/capture"
+	"github.com/grokki91/xray_client/internal/clients"
 	"github.com/grokki91/xray_client/internal/evidence"
 	"github.com/grokki91/xray_client/internal/redact"
 )
@@ -190,7 +191,64 @@ func (r *run) healthEvidence(h *bridge.Health) {
 		f["ver_xray_mlkem"] = r.e.Rules.Compat.MlkemRule(v)
 		sum += fmt.Sprintf("; Xray обновлён до %s %s", v, time.Unix(t, 0).Format("02.01 15:04"))
 	}
+	sum += r.healthTimeline(h, f)
 	r.put(evidence.Evidence{ID: "S2", Source: evidence.FromServer, Reliability: evidence.High, Facts: f, Summary: sum})
+}
+
+// incidentClass — вердикт окна журнала здоровья → сторона сбоя: сервер сам (самопроверка), путь
+// (заморозки по tcp_info соединений клиентов) или другое. nodata/monitor — не сбой: клиентов не
+// было или журнал только наблюдал.
+func incidentClass(vd string) string {
+	switch vd {
+	case "server":
+		return "server"
+	case "freeze":
+		return "freeze"
+	case "degraded", "suspect":
+		return "other"
+	}
+	return ""
+}
+
+// healthTimeline — S2 по времени (решение 14): инциденты за сутки и совпадения с эпизодами
+// сбоев из логов клиента (C6). Время ПК → часы сервера — по сдвигу из фактов (S1), допуск —
+// окно журнала (EpisodeGap).
+func (r *run) healthTimeline(h *bridge.Health, f map[string]any) string {
+	now := h.Now
+	if now == 0 {
+		now = r.now().Unix()
+	}
+	day := map[string]int{}
+	for _, x := range h.Overlaps(now-24*3600, now) {
+		if c := incidentClass(x.VD); c != "" {
+			day[c]++
+		}
+	}
+	f["day_server"], f["day_freeze"], f["day_other"] = day["server"], day["freeze"], day["other"]
+	if len(r.tl.Episodes) == 0 {
+		return ""
+	}
+	off := int64(0)
+	if v, ok := r.set.Get("S1").Num("time_offset_s"); ok {
+		off = int64(v) // время ПК минус время сервера
+	}
+	gap := int64(clients.EpisodeGap / time.Second)
+	match := map[string]int{}
+	for _, ep := range r.tl.Episodes {
+		seen := map[string]bool{}
+		for _, x := range h.Overlaps(ep.From.Unix()-off-gap, ep.To.Unix()-off+gap) {
+			if c := incidentClass(x.VD); c != "" && !seen[c] {
+				seen[c] = true
+				match[c]++
+			}
+		}
+		if len(seen) > 0 {
+			match["any"]++
+		}
+	}
+	f["overlap"], f["overlap_server"], f["overlap_freeze"], f["overlap_other"] = match["any"], match["server"], match["freeze"], match["other"]
+	return fmt.Sprintf("; серий сбоев клиента %d, из них совпали с инцидентами сервера %d (сбой сервера %d, заморозки %d)",
+		len(r.tl.Episodes), match["any"], match["server"], match["freeze"])
 }
 
 func (r *run) doctorEvidence(d *bridge.Doctor, src string) {
