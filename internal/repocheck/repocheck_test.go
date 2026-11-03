@@ -1,7 +1,7 @@
 // Package repocheck — проверка репозитория на данные установки (AGENTS.md): IP вне
 // документационных сетей (RFC 5737), петли, частных сетей и публичных резолверов, UUID кроме
 // заглушек 00000000-0000-…, URI vless:// с адресом — провал. Те же правила, что tests/check.sh
-// в grokki91/xray.
+// в grokki91/xray. REPOCHECK_EXTRA — ещё файлы (текст команды от хука commit-guard).
 package repocheck
 
 import (
@@ -72,6 +72,30 @@ func files(t *testing.T, dir string) []string {
 	return fs
 }
 
+// scan — нарушения в тексте s файла f.
+func scan(f, s string) []string {
+	var bad []string
+	for _, ip := range reIP.FindAllString(s, -1) {
+		if !IPOK(ip) {
+			bad = append(bad, f+": адрес "+ip+" — не документационный, не частный, не резолвер")
+		}
+	}
+	for _, u := range reUUID.FindAllString(s, -1) {
+		if !strings.HasPrefix(u, "00000000-0000-") {
+			bad = append(bad, f+": UUID "+u+" (данные установки — никогда; в тестах — 00000000-0000-…)")
+		}
+	}
+	for _, m := range reURI.FindAllStringSubmatch(s, -1) {
+		h := m[1]
+		if !IPOK(h) && !strings.HasSuffix(h, "example.com") && !strings.HasSuffix(h, "example.net") {
+			bad = append(bad, f+": vless:// с адресом "+h)
+		}
+	}
+	return bad
+}
+
+// TestNoInstallationData — рабочее дерево и файлы из REPOCHECK_EXTRA (через разделитель путей
+// ОС): туда хук .claude/hooks/commit-guard.sh кладёт текст команды git commit/push.
 func TestNoInstallationData(t *testing.T) {
 	dir := root(t)
 	for _, f := range files(t, dir) {
@@ -79,22 +103,21 @@ func TestNoInstallationData(t *testing.T) {
 		if err != nil || bytes.IndexByte(b, 0) >= 0 {
 			continue // удалён или бинарный
 		}
-		s := string(b)
-		for _, ip := range reIP.FindAllString(s, -1) {
-			if !IPOK(ip) {
-				t.Errorf("%s: адрес %s — не документационный, не частный, не резолвер", f, ip)
-			}
+		for _, e := range scan(f, string(b)) {
+			t.Error(e)
 		}
-		for _, u := range reUUID.FindAllString(s, -1) {
-			if !strings.HasPrefix(u, "00000000-0000-") {
-				t.Errorf("%s: UUID %s (данные установки — никогда; в тестах — 00000000-0000-…)", f, u)
-			}
+	}
+	for _, f := range filepath.SplitList(os.Getenv("REPOCHECK_EXTRA")) {
+		if f == "" {
+			continue
 		}
-		for _, m := range reURI.FindAllStringSubmatch(s, -1) {
-			h := m[1]
-			if !IPOK(h) && !strings.HasSuffix(h, "example.com") && !strings.HasSuffix(h, "example.net") {
-				t.Errorf("%s: vless:// с адресом %s", f, h)
-			}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Errorf("REPOCHECK_EXTRA: %v", err)
+			continue
+		}
+		for _, e := range scan("текст команды", string(b)) {
+			t.Error(e)
 		}
 	}
 }
