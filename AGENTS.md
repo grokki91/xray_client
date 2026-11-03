@@ -117,6 +117,9 @@ go run ./cmd/version -check origin/main -changes   # файл changes/ на ме
 - `.claude/skills/diagnostics/` — живой случай → улика → правило → сценарий; ловушки; факты
   извне; проверка на живом.
 - `.claude/skills/pr-description/` — заголовок и тело каждого PR.
+- `.claude/skills/ml-system-design-review/`, `lossless-doc-compress/` — вендорные (MIT,
+  `ML-SystemDesign/MLSystemDesign`): ревью системного дизайна и сжатие текстов без потерь;
+  привязка к xdiag — их `references/xdiag.md`, апстрим не править.
 - `.claude/rules/` — правила для файлов: `diagnostic-rules.md` — `rules/`; `probes.md` — пробы,
   улики, адаптеры, мост; `ui.md` — окно и отчёт; `docs.md` — README и `docs/`.
 
