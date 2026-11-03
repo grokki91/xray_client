@@ -488,6 +488,7 @@ client.socks.exposed     локальный прокси слушает 0.0.0.0 
 client.clock             часы ПК расходятся с сервером
 profile.uuid|pbk|sid|sni|path|port|fp|transport   поле профиля не совпадает с сервером
 profile.import           URI/QR/подписка испорчены при импорте
+profile.unsupported      профиль цел, но не VLESS + REALITY (VLESS + TLS, VMess…): не диагностируется
 os.route.loop            маршрут к серверу ушёл в TUN
 os.dns.*                 DNS Windows (DoH, SMHNR, NRPT) мешает L6 или эталонам
 os.firewall.block        правило файрвола на клиент

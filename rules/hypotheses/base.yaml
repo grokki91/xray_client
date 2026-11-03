@@ -28,6 +28,18 @@
     - "Если v2rayN портативный — указать его папку в «Настройки → Папка v2rayN»"
     - "Профиль с сервера: `sudo xm uri <имя>`"
 
+# Профиль цел, но не VLESS + REALITY (VLESS + TLS, VMess, …): xdiag его не диагностирует.
+# Это не «испорчен при импорте» (profile.import) — переимпорт ничего не изменит.
+- code: profile.unsupported
+  likely:
+    - ["C3.issues~security.not_reality|protocol.not_vless"]
+  title: "Профиль не поддерживается: {C3.kind} — xdiag проверяет только VLESS + REALITY"
+  why: "Выбранный профиль — {C3.kind}. Он может быть исправен, но xdiag диагностирует только подключения VLESS + REALITY (установка `grokki91/xray`): эталонное ядро, сверка с сервером и правила рассчитаны на REALITY. Проверки сервера и пути для этого профиля ничего не доказывают."
+  actions:
+    - "Вставить профиль VLESS + REALITY (vless://…?security=reality…) в «Настройки → Профиль»"
+    - "Профиль с сервера: `sudo xm uri <имя>`"
+    - "Если нужен именно этот профиль — проверять его средствами клиента: xdiag его не диагностирует"
+
 - code: server.listen
   confirmed:
     - ["S1.self_r=fail", "S1.self_at=listen"]

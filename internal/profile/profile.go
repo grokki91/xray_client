@@ -253,6 +253,19 @@ func (p *Profile) ServerKey() string {
 	return redact.HashWith([]byte("xdiag/server-key"), strings.ToLower(strings.Trim(p.Address, "[]"))+"|"+fmt.Sprint(p.Port))
 }
 
+// Kind — протокол и защита профиля для текста («VLESS + TLS»), без значений установки.
+func (p *Profile) Kind() string {
+	proto := p.Protocol
+	if proto == "" {
+		proto = "vless"
+	}
+	sec := p.Security
+	if sec == "" {
+		sec = "none"
+	}
+	return strings.ToUpper(safeToken(proto)) + " + " + strings.ToUpper(safeToken(sec))
+}
+
 // IsRealityVLESS — профиль, который приложение умеет диагностировать.
 func (p *Profile) IsRealityVLESS() bool {
 	return (p.Protocol == "" || p.Protocol == "vless") && p.Security == "reality"
