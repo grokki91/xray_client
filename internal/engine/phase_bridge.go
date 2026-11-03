@@ -210,7 +210,7 @@ func incidentClass(vd string) string {
 	return ""
 }
 
-// healthTimeline — S2 по времени (решение 14): инциденты за сутки и совпадения с эпизодами
+// healthTimeline — S2 по времени (решение 15): инциденты за сутки и совпадения с эпизодами
 // сбоев из логов клиента (C6). Время ПК → часы сервера — по сдвигу из фактов (S1), допуск —
 // окно журнала (EpisodeGap).
 func (r *run) healthTimeline(h *bridge.Health, f map[string]any) string {

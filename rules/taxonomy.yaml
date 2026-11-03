@@ -16,6 +16,7 @@ layers:
 codes:
   lan.noinet:            {layer: L2, order: 100, title: "Нет интернета"}
   profile.missing:       {layer: L5, order: 110, title: "Профиль не найден"}
+  profile.unsupported:   {layer: L5, order: 112, title: "Профиль не поддерживается (не VLESS + REALITY)"}
   server.listen:         {layer: L4, order: 150, title: "Сервер: Xray не слушает порт"}
   server.dns:            {layer: L4, order: 151, title: "Сервер: маска не резолвится"}
   server.egress:         {layer: L4, order: 152, title: "Сервер: нет выхода в интернет"}
@@ -71,7 +72,7 @@ codes:
   beyond.ru_direct:      {layer: L6, order: 955, title: "Российские сайты через тоннель закрыты"}
   path.sni:              {layer: L3, order: 956, title: "SNI маски режется в этой сети"}
   server.ssh.silent:     {layer: L4, order: 957, title: "SSH сервера отсюда недоступен"}
-  # Во времени (решение 14): логи клиента за сутки и журнал здоровья сервера.
+  # Во времени (решение 15): логи клиента за сутки и журнал здоровья сервера.
   unstable.drops:        {layer: "-", order: 958, title: "Обрывы эпизодами"}
   server.episodes:       {layer: L4, order: 959, title: "Сервер сбоил за сутки"}
   path.freeze.episodes:  {layer: L3, order: 960, title: "Заморозки в часы обрывов"}

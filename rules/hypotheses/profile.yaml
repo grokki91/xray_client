@@ -2,7 +2,8 @@
 
 - code: profile.import
   likely:
-    - ["C3.issues~addr.empty|addr.format|security.not_reality|protocol.not_vless"]
+    # security.not_reality / protocol.not_vless — не «испорчен», а profile.unsupported (base.yaml).
+    - ["C3.issues~addr.empty|addr.format"]
   title: "Профиль испорчен при импорте: {C3.issues_text}"
   why: "В профиле клиента не хватает обязательных полей или они испорчены (лишние пробелы, обрезанная строка)."
   actions: ["Удалить профиль и импортировать заново: `sudo xm uri <имя>` → копировать целиком"]

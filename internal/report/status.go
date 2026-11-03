@@ -54,6 +54,8 @@ func status(s *engine.SessionData, m rules.Result, chain []Stage) Status {
 		return Status{"problem", "Не работает: нет интернета"}
 	case m.Code == "profile.missing":
 		return Status{"incomplete", "Проверять нечего: профиль не найден"}
+	case m.Code == "profile.unsupported":
+		return Status{"incomplete", "Не проверено: профиль не VLESS + REALITY"}
 	case m.Level.Rank() >= rules.Likely.Rank():
 		if p := layerPhrase[m.Layer]; p != "" {
 			return Status{"problem", "Не работает: причина " + p}
@@ -365,6 +367,8 @@ func problemText(s *engine.SessionData, m rules.Result) string {
 		return "Нет интернета на этом ПК"
 	case "profile.missing":
 		return "Не найден профиль подключения"
+	case "profile.unsupported":
+		return "Профиль не VLESS + REALITY — xdiag его не диагностирует"
 	case "unknown.budget":
 		return "Сервер не проверен: лимит проб к серверу"
 	}

@@ -256,6 +256,27 @@ func TestOfflineNoProfile(t *testing.T) {
 	}
 }
 
+// VLESS + TLS из настроек: профиль цел, но не REALITY — «не поддерживается», а не
+// «испорчен при импорте» (issue #15).
+func TestSettingsProfileNotReality(t *testing.T) {
+	root := t.TempDir()
+	e := testEngine(t, nil, root)
+	uri := "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443?encryption=none&security=tls&sni=example.com&type=xhttp&path=%2Fx#t"
+	sess, err := e.Run(context.Background(), Options{Offline: true, ProfileURI: uri}, Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := sess.Verdict.Main
+	if m.Code != "profile.unsupported" || !strings.Contains(m.Title, "VLESS + TLS") {
+		t.Fatalf("%s/%s: %s", m.Code, m.Level, m.Title)
+	}
+	for _, r := range append(append(sess.Verdict.Also, sess.Verdict.Possible...), m) {
+		if r.Code == "profile.import" {
+			t.Fatalf("profile.import при целом профиле: %+v", r)
+		}
+	}
+}
+
 // Нет интернета: эталоны недоступны — lan.noinet, а не «блокировка».
 func TestNoInternet(t *testing.T) {
 	root := t.TempDir()

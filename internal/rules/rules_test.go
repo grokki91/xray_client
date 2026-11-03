@@ -68,6 +68,12 @@ func TestScenarios(t *testing.T) {
 		{"эталон получил маску", with(v2rayn("chrome", true), ev("P2", "outcome", "mask_cert"), ev("P3", "outcome", "real_cert")), "profile.reality", Likely},
 		{"сервер закрыл после рукопожатия", with(v2rayn("chrome", true), ev("P3", "outcome", "closed_after_handshake")), "profile.user", Likely},
 		{"профиля нет", []evidence.Evidence{ev("N1", "ok", true), ev("C3", "found", false)}, "profile.missing", Likely},
+		// Профиль цел, но не VLESS + REALITY: «не поддерживается», а не «испорчен при импорте».
+		{"VLESS+TLS из настроек", []evidence.Evidence{ev("N1", "ok", true), ev("N4", "ok", true), ev("CX", "client", "uri"),
+			ev("C3", "found", true, "source", "uri", "security", "tls", "kind", "VLESS + TLS", "issues", []string{"security.not_reality"}),
+			ev("P1", "outcome", "ok"), ev("P2", "outcome", "real_cert")}, "profile.unsupported", Likely},
+		{"не VLESS", with(ev("C3", "found", true, "kind", "VMESS + REALITY", "issues", []string{"protocol.not_vless"})), "profile.unsupported", Likely},
+		{"REALITY-профиль с испорченным адресом", with(v2rayn("chrome", true), ev("C3", "found", true, "issues", []string{"addr.format"})), "profile.import", Likely},
 		// Строка 3 — путь.
 		{"SYN режется дважды", with(v2rayn("chrome", true), ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout")), "path.ip.unreachable", Likely},
 		{"SYN режется, из другой сети ок", with(v2rayn("chrome", true), ev("P1", "outcome", "timeout"), ev("P5", "p1", "ok")), "path.ip.unreachable", Confirmed},
@@ -381,7 +387,7 @@ func TestMissingTexts(t *testing.T) {
 	}
 }
 
-// Нестабильность во времени (решение 14): находки — только на уликах наблюдения. Серии сбоев в
+// Нестабильность во времени (решение 15): находки — только на уликах наблюдения. Серии сбоев в
 // логах клиента при работающем сейчас тоннеле — «вероятно», совпадение с инцидентом журнала
 // здоровья — «подтверждено»; сторона (сервер или путь) — только по журналу сервера, про путь —
 // не выше «вероятно» и только при интернете (таймаут ≠ блокировка).

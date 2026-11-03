@@ -92,10 +92,11 @@ TLS-соединений в минуту и 6 TCP за 5 минут. Лимит 
 номер PR или имя ветки):
 
 ```powershell
-iwr https://raw.githubusercontent.com/grokki91/xray_client/main/try-pr.ps1 -OutFile $env:TEMP\try-pr.ps1; powershell -ep Bypass -f $env:TEMP\try-pr.ps1 21
+iwr https://raw.githubusercontent.com/grokki91/xray_client/main/try-pr.ps1 -UseBasicParsing -OutFile $env:TEMP\try-pr.ps1; powershell -ep Bypass -f $env:TEMP\try-pr.ps1 21
 ```
 
-Скрипт берёт сборку последнего коммита из Actions и запускает `xdiag-ui.exe`. Скачать её
+Команда работает из любой папки: скрипт скачивается в `%TEMP%`, берёт сборку последнего
+коммита из Actions, кладёт её в `%TEMP%\xdiag-<коммит>` и запускает оттуда `xdiag-ui.exe`. Скачать её
 GitHub даёт только после входа: через `gh` (`winget install GitHub.cli`, затем
 `gh auth login`) или токен в переменной `GH_TOKEN`. Без них, а также с ключом `-Build`, скрипт
 собирает программу из исходников (нужны git и Go 1.26+).
