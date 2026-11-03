@@ -62,3 +62,22 @@ func TestTryPRMatchesWorkflow(t *testing.T) {
 		t.Error("build.yml больше не кладёт SHA256SUMS.txt, а try-pr.ps1 его сверяет")
 	}
 }
+
+// Команда проверки PR в README, скилле и шапке скрипта — одна и та же и не зависит от
+// локальной копии: try-pr.ps1 скачивается из main в %TEMP%.
+func TestTryPRCommandFromTemp(t *testing.T) {
+	r := root(t)
+	const cmd = `iwr https://raw.githubusercontent.com/grokki91/xray_client/main/try-pr.ps1 -UseBasicParsing -OutFile $env:TEMP\try-pr.ps1; powershell -ep Bypass -f $env:TEMP\try-pr.ps1 `
+	for _, f := range []string{"README.md", "try-pr.ps1", ".claude/skills/pr-description/SKILL.md"} {
+		b, err := os.ReadFile(filepath.Join(r, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(b, []byte(cmd)) {
+			t.Errorf("%s: нет команды запуска try-pr.ps1 из %%TEMP%%", f)
+		}
+		if regexp.MustCompile(`-f(?:ile)? \.\\try-pr\.ps1`).Match(b) {
+			t.Errorf("%s: запуск .\\try-pr.ps1 из папки проекта — локальная копия бывает старше main", f)
+		}
+	}
+}

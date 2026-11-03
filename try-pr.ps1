@@ -1,9 +1,9 @@
 ﻿# Проверка ветки или PR на живой Windows одной командой: сборка CI (артефакт
 # xdiag-windows-amd64 последнего успешного run build) → %TEMP%\xdiag-<коммит> → xdiag-ui.exe.
 #
-#   iwr https://raw.githubusercontent.com/grokki91/xray_client/main/try-pr.ps1 -OutFile $env:TEMP\try-pr.ps1; powershell -ep Bypass -f $env:TEMP\try-pr.ps1 <номер PR|ветка>
+#   iwr https://raw.githubusercontent.com/grokki91/xray_client/main/try-pr.ps1 -UseBasicParsing -OutFile $env:TEMP\try-pr.ps1; powershell -ep Bypass -f $env:TEMP\try-pr.ps1 <номер PR|ветка>
 #
-# Из папки проекта:  powershell -ep Bypass -f .\try-pr.ps1 <номер PR|ветка>
+# Запускается из любой папки; локальная копия проекта не нужна.
 #
 # Скачивание артефакта Actions требует входа в GitHub даже для публичного репозитория:
 #   1) gh, если установлен и выполнен gh auth login;
