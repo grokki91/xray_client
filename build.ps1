@@ -1,4 +1,4 @@
-# Сборка xdiag на Windows из исходников (docs/architecture.md, вопрос 5: сборка владельцем).
+﻿# Сборка xdiag на Windows из исходников (docs/architecture.md, вопрос 5: сборка владельцем).
 # Нужен Go 1.26+:  winget install GoLang.Go   (и git)
 # Результат: dist\xdiag-ui.exe (окно) и dist\xdiag.exe (терминал).
 $ErrorActionPreference = 'Stop'
