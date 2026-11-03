@@ -386,3 +386,33 @@ func TestMissingTexts(t *testing.T) {
 		}
 	}
 }
+
+// Issue #17: UDP через тоннель (B4). Эталон прошёл, а DNS по UDP через тот же тоннель без
+// ответа — находка beyond.udp; главный итог остаётся «работает». Без P3=ok (gate) и при
+// ответе по UDP находки нет.
+func TestUDPThroughTunnel(t *testing.T) {
+	e, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(v Verdict) bool {
+		for _, f := range v.Findings {
+			if f.Code == "beyond.udp" {
+				return f.Level == Likely
+			}
+		}
+		return false
+	}
+	v := e.Decide(evidence.FromList(append(base(), v2rayn("chrome", true), ev("P3", "outcome", "ok"), ev("B4", "udp_ok", false))))
+	if v.Main.Code != "ok" || !has(v) {
+		t.Fatalf("UDP без ответа: main %s, находки %v", v.Main.Code, v.Findings)
+	}
+	v = e.Decide(evidence.FromList(append(base(), v2rayn("chrome", true), ev("P3", "outcome", "ok"), ev("B4", "udp_ok", true))))
+	if v.Main.Code != "ok" || has(v) {
+		t.Fatalf("UDP отвечает: main %s, находки %v", v.Main.Code, v.Findings)
+	}
+	v = e.Decide(evidence.FromList(append(base(), v2rayn("chrome", true), ev("P3", "outcome", "freeze", "freeze", "f16"), ev("B4", "udp_ok", false))))
+	if has(v) {
+		t.Fatalf("без P3=ok находки быть не должно: %v", v.Findings)
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/miekg/dns"
 	"github.com/xtls/xray-core/common/log"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
@@ -60,6 +61,10 @@ type Options struct {
 	Download      string // URL через тоннель для классов заморозки
 	DownloadBytes int
 	Extra         map[string]string // имя → URL: дополнительные запросы через тот же тоннель (B2, B3)
+	// B4: DNS-запрос по UDP через тоннель (UDP over VLESS / XUDP) к публичному резолверу
+	// "ip:port" об имени UDPName. Пусто — UDP не проверяется.
+	UDPDNS  string
+	UDPName string
 
 	Timeout time.Duration // на всю пробу; по умолчанию 40 с
 	Stall   time.Duration // нет прогресса — заморозка; по умолчанию 8 с
@@ -79,6 +84,8 @@ type Result struct {
 	Conns      int             `json:"conns"`       // сокетов к серверу
 	DownloadMs int             `json:"download_ms"` // время скачивания
 	Extra      map[string]bool `json:"extra,omitempty"`
+	UDP        string          `json:"udp,omitempty"` // B4: ok | no_answer | budget | error; пусто — не проверялся
+	UDPMs      int             `json:"udp_ms,omitempty"`
 	Logs       []string        `json:"-"` // сообщения ядра — наружу только через redact
 	Err        string          `json:"-"`
 }
@@ -92,6 +99,7 @@ type probeState struct {
 	conns   []*trackedConn
 	dialErr []string
 	logs    []string
+	budget  atomic.Int32 // соединения к серверу, не открытые из-за бюджета
 }
 
 type trackedConn struct {
@@ -133,6 +141,7 @@ func (sysDialer) Dial(ctx context.Context, _ xnet.Address, dest xnet.Destination
 		// Каждый TCP к серверу у ядра — REALITY-хендшейк: списывается как TLS.
 		if st.opts.Budget != nil {
 			if err := st.opts.Budget.Acquire(netprobe.TLS); err != nil {
+				st.budget.Add(1)
 				return nil, err
 			}
 		}
@@ -263,6 +272,22 @@ func Run(ctx context.Context, o Options) Result {
 			cancel()
 			res.Extra[name] = err == nil && s > 0 && s < 500
 		}
+		if o.UDPDNS != "" {
+			b0 := st.budget.Load()
+			t1 := time.Now()
+			ok, uerr := udpDNS(ctx, inst, o.UDPDNS, o.UDPName)
+			res.UDPMs = int(time.Since(t1).Milliseconds())
+			switch {
+			case ok:
+				res.UDP = "ok"
+			case st.budget.Load() > b0:
+				res.UDP = "budget"
+			case uerr == nil || netprobe.Classify(uerr) == "timeout":
+				res.UDP = "no_answer"
+			default:
+				res.UDP = "error"
+			}
+		}
 		if res.Outcome == "" {
 			res.Outcome = "ok"
 		}
@@ -362,6 +387,71 @@ func classifyConfigErr(err error) string {
 		return "fp_unsupported"
 	}
 	return "config_error"
+}
+
+// udpDNS — один A-запрос по UDP через ядро: datagram уходит в тоннель (UDP over VLESS / XUDP),
+// сервер отправляет его резолверу со своего адреса. Ответ с тем же ID — UDP через тоннель ходит.
+// На XHTTP запрос идёт по уже открытому соединению (xmux): нового TLS к серверу нет. Повтор
+// через 2 с — на случай потери datagram; ожидание всего ≤ 6 с.
+func udpDNS(ctx context.Context, inst *core.Instance, resolver, name string) (bool, error) {
+	host, ps, err := net.SplitHostPort(resolver)
+	if err != nil {
+		return false, err
+	}
+	pn, _ := strconv.Atoi(ps)
+	if name == "" {
+		name = "www.gstatic.com"
+	}
+	q := new(dns.Msg)
+	q.SetQuestion(dns.Fqdn(name), dns.TypeA)
+	q.RecursionDesired = true
+	wire, err := q.Pack()
+	if err != nil {
+		return false, err
+	}
+	c, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	conn, err := core.Dial(c, inst, xnet.UDPDestination(xnet.ParseAddress(host), xnet.Port(pn)))
+	if err != nil {
+		return false, err
+	}
+	stop := context.AfterFunc(c, func() { _ = conn.Close() })
+	defer stop()
+	defer conn.Close()
+	got := make(chan bool, 1)
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, err := conn.Read(buf)
+			if err != nil {
+				got <- false
+				return
+			}
+			m := new(dns.Msg)
+			if m.Unpack(buf[:n]) == nil && m.Response && m.Id == q.Id {
+				got <- true
+				return
+			}
+		}
+	}()
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	if _, err := conn.Write(wire); err != nil {
+		return false, err
+	}
+	for {
+		select {
+		case ok := <-got:
+			if !ok && c.Err() != nil {
+				return false, context.DeadlineExceeded
+			}
+			return ok, nil
+		case <-tick.C:
+			_, _ = conn.Write(wire)
+		case <-c.Done():
+			return false, context.DeadlineExceeded
+		}
+	}
 }
 
 // tunnelClient — HTTP-клиент, каждое соединение которого — сессия VLESS через эталонное ядро.
