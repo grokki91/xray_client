@@ -31,8 +31,12 @@ import (
 	"github.com/grokki91/xray_client/internal/store"
 )
 
-// Version — версия приложения (подставляется при сборке -ldflags).
-var Version = "dev"
+// Version — версия приложения, Commit — коммит сборки. Подставляются при сборке:
+// go build -ldflags "$(go run ./cmd/version -ldflags)" (номер — из changes/*.md).
+var (
+	Version = "dev"
+	Commit  = ""
+)
 
 // Options — что делать в сеансе.
 type Options struct {

@@ -43,6 +43,7 @@ const ICONS = {
   eye: ["M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z", "M12 9a3 3 0 1 0 0 6a3 3 0 1 0 0-6"],
   swap: ["M7 7h13", "M16 3l4 4-4 4", "M17 17H4", "M8 13l-4 4 4 4"],
   trash: ["M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3"],
+  info: ["M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18", "M12 11v5", "M12 7.5h.01"],
   link: ["M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1", "M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"],
 };
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -98,6 +99,7 @@ const PAGES = {
   history: ["История", "Прошлые сеансы на этом ПК"],
   settings: ["Настройки", "Сервер, клиенты и как проверять"],
   data: ["Данные", "Что xdiag хранит на этом ПК"],
+  about: ["О программе", "Версия и сборка"],
 };
 document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
 function showTab(name) {
@@ -109,6 +111,7 @@ function showTab(name) {
   if (name === "settings") loadSettings();
   if (name === "data") loadData();
 }
+$("ver").addEventListener("click", () => showTab("about"));
 
 document.querySelectorAll(".dtab").forEach((b) => b.addEventListener("click", () => showDTab(b.dataset.dtab)));
 function showDTab(name) {
@@ -321,6 +324,8 @@ async function init() {
   try {
     const info = await api().Info();
     $("ver").textContent = "версия " + info.version;
+    $("aVer").textContent = info.version;
+    $("aCommit").textContent = info.commit || "—";
     if (info.error) {
       await modal({ title: "Ошибка запуска", text: info.error, no: null, yes: "Закрыть" });
     }
