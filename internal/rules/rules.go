@@ -410,6 +410,8 @@ func (e *Engine) checkDone(set *evidence.Set, id string) bool {
 	switch id {
 	case "S1", "S3", "P5", "C7":
 		return set.Has(id)
+	case "S2":
+		return set.Get("S2").Bool("ok") // журнал выключен — совет включить остаётся
 	}
 	return false
 }
