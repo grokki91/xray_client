@@ -386,3 +386,92 @@ func TestMissingTexts(t *testing.T) {
 		}
 	}
 }
+
+// Нестабильность во времени (решение 16): находки — только на уликах наблюдения. Серии сбоев в
+// логах клиента при работающем сейчас тоннеле — «вероятно», совпадение с инцидентом журнала
+// здоровья — «подтверждено»; сторона (сервер или путь) — только по журналу сервера, про путь —
+// не выше «вероятно» и только при интернете (таймаут ≠ блокировка).
+func TestInstabilityFindings(t *testing.T) {
+	e, _ := Load()
+	levels := func(evs ...evidence.Evidence) (string, map[string]Level) {
+		v := e.Decide(evidence.FromList(append(append(base(), v2rayn("chrome", true)), evs...)))
+		got := map[string]Level{}
+		for _, f := range v.Findings {
+			got[f.Code] = f.Level
+		}
+		return v.Main.Code, got
+	}
+	ok := ev("C10", "listening", true, "outcome", "ok")
+	for _, c := range []struct {
+		name string
+		evs  []evidence.Evidence
+		want map[string]Level
+	}{
+		{"одна серия, сейчас работает — мало", []evidence.Evidence{ok, ev("C6", "found", true, "episodes", 1, "recovered", 0)}, map[string]Level{}},
+		{"одна серия, после неё работал", []evidence.Evidence{ev("C6", "found", true, "episodes", 1, "recovered", 1)},
+			map[string]Level{"unstable.drops": Possible}},
+		{"серии, сейчас работает", []evidence.Evidence{ok, ev("C6", "found", true, "episodes", 3, "recovered", 0)},
+			map[string]Level{"unstable.drops": Likely}},
+		{"серия совпала с заморозкой сервера", []evidence.Evidence{ok, ev("C6", "found", true, "episodes", 1),
+			ev("S2", "ok", true, "overlap", 1, "overlap_freeze", 1, "overlap_server", 0)},
+			map[string]Level{"unstable.drops": Confirmed, "path.freeze.episodes": Likely}},
+		{"серия совпала со сбоем сервера", []evidence.Evidence{ev("P3", "outcome", "ok"), ev("C6", "found", true, "episodes", 2),
+			ev("S2", "ok", true, "overlap", 1, "overlap_freeze", 1, "overlap_server", 1)},
+			map[string]Level{"unstable.drops": Confirmed, "server.episodes": Likely}},
+		{"только журнал сервера", []evidence.Evidence{ok, ev("S2", "ok", true, "day_server", 2, "day_freeze", 3)},
+			map[string]Level{"server.episodes": Possible, "path.freeze.episodes": Possible}},
+	} {
+		main, got := levels(c.evs...)
+		for _, code := range []string{"unstable.drops", "server.episodes", "path.freeze.episodes"} {
+			if got[code] != c.want[code] {
+				t.Errorf("%s: %s = %q, ожидалось %q", c.name, code, got[code], c.want[code])
+			}
+		}
+		if c.evs[0].ID == "C10" && main != "ok.client" {
+			t.Errorf("%s: находка не меняет итог «работает», а итог %s", c.name, main)
+		}
+	}
+	// Без интернета заморозка по пути не поднимается даже при совпадении.
+	v := e.Decide(evidence.FromList([]evidence.Evidence{ev("N1", "ok", false), ev("C3", "found", true), v2rayn("chrome", true),
+		ev("C6", "found", true, "episodes", 2), ev("S2", "ok", true, "overlap", 1, "overlap_freeze", 1)}))
+	for _, f := range v.Findings {
+		if f.Code == "path.freeze.episodes" {
+			t.Fatal("path.freeze.episodes без N1.ok")
+		}
+	}
+	// Совет «журнал здоровья» — пока журнала нет или он выключен; с журналом — не повторяется.
+	if !e.checkDone(evidence.FromList([]evidence.Evidence{ev("S2", "ok", true)}), "S2") ||
+		e.checkDone(evidence.FromList([]evidence.Evidence{ev("S2", "ok", false)}), "S2") {
+		t.Fatal("checkDone S2")
+	}
+}
+
+// Issue #17: UDP через тоннель (B4). Эталон прошёл, а DNS по UDP через тот же тоннель без
+// ответа — находка beyond.udp; главный итог остаётся «работает». Без P3=ok (gate) и при
+// ответе по UDP находки нет.
+func TestUDPThroughTunnel(t *testing.T) {
+	e, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func(v Verdict) bool {
+		for _, f := range v.Findings {
+			if f.Code == "beyond.udp" {
+				return f.Level == Likely
+			}
+		}
+		return false
+	}
+	v := e.Decide(evidence.FromList(append(base(), v2rayn("chrome", true), ev("P3", "outcome", "ok"), ev("B4", "udp_ok", false))))
+	if v.Main.Code != "ok" || !has(v) {
+		t.Fatalf("UDP без ответа: main %s, находки %v", v.Main.Code, v.Findings)
+	}
+	v = e.Decide(evidence.FromList(append(base(), v2rayn("chrome", true), ev("P3", "outcome", "ok"), ev("B4", "udp_ok", true))))
+	if v.Main.Code != "ok" || has(v) {
+		t.Fatalf("UDP отвечает: main %s, находки %v", v.Main.Code, v.Findings)
+	}
+	v = e.Decide(evidence.FromList(append(base(), v2rayn("chrome", true), ev("P3", "outcome", "freeze", "freeze", "f16"), ev("B4", "udp_ok", false))))
+	if has(v) {
+		t.Fatalf("без P3=ok находки быть не должно: %v", v.Findings)
+	}
+}

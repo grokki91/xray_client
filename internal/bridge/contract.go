@@ -326,14 +326,8 @@ type Health struct {
 		ReadyPct       *float64 `json:"ready_pct"`
 		SessionsPct    *float64 `json:"sessions_pct"`
 	} `json:"d7"`
-	Incidents []struct {
-		From int64  `json:"from"`
-		To   int64  `json:"to"`
-		Why  string `json:"why"`
-		VD   string `json:"vd"`
-		N    int    `json:"n"`
-	} `json:"incidents"`
-	Events []struct {
+	Incidents []Incident `json:"incidents"`
+	Events    []struct {
 		T int64  `json:"t"`
 		E string `json:"e"`
 	} `json:"events"`
@@ -342,6 +336,31 @@ type Health struct {
 		VD string `json:"vd"`
 		TR *int64 `json:"tr"`
 	} `json:"last"`
+}
+
+// Incident — инцидент журнала здоровья: окна [From, To] (unix, часы сервера) с вердиктом VD
+// (`server | freeze | degraded | suspect | nodata | monitor`), N окон подряд.
+type Incident struct {
+	From int64  `json:"from"`
+	To   int64  `json:"to"`
+	Why  string `json:"why"`
+	VD   string `json:"vd"`
+	N    int    `json:"n"`
+}
+
+// Overlaps — инциденты, пересекающие [from, to] (unix, часы сервера).
+func (h *Health) Overlaps(from, to int64) []Incident {
+	var out []Incident
+	for _, x := range h.Incidents {
+		end := x.To
+		if end < x.From {
+			end = x.From
+		}
+		if x.From <= to && end >= from {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // ParseHealth — разбор с проверкой контракта.
