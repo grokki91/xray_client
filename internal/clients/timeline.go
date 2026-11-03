@@ -42,7 +42,7 @@ type Timeline struct {
 
 // connFail — ключи шаблонов, которые означают сбой соединения через сервер.
 var connFail = map[string]bool{"reality_failed": true, "real_cert": true, "x509": true, "eof": true,
-	"reset": true, "refused": true, "timeout": true}
+	"reset": true, "aborted": true, "refused": true, "timeout": true}
 
 // reStamp — время в начале строки: sing-box «+0300 2026-11-01 12:34:56», Xray
 // «2026/11/01 12:34:56.123456», приложения «[2026-11-01 12:34:56.789]» / «2026-11-01T12:34:56».

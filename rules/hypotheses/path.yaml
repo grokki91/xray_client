@@ -9,7 +9,7 @@
     - ["N2.ru_ok=true", "N2.foreign_ok=false", "P1.outcome=timeout"]
   possible:
     - ["N2.ru_ok=true", "N2.foreign_ok=false"]
-  excluded: ["N2.foreign_ok=true", "P1.outcome=ok", "C10.outcome=ok"]
+  excluded: ["N2.foreign_ok=true", "P1.outcome=ok", "C10.outcome=ok", "C11.outcome=established"]
   title: "Белый список: российские сайты открываются, зарубежные и сервер — нет"
   why: "Так выглядит режим белого списка мобильной сети (IP + SNI): пускают только разрешённые адреса."
   alternative: "То же даст фильтр на роутере или корпоративный прокси. Подтвердить — повтором из другой сети (домашний Wi-Fi)."
@@ -26,12 +26,14 @@
     - ["S3.code=net.synack", "S3.ssh=true"]
   likely:
     - ["P1.outcome=timeout", "P4.tcp=timeout", "!P5.p1=timeout|unreachable"]
+    # SYN самого клиента во время запроса через него тоже без ответа (C11) — вторая попытка, как P4.
+    - ["P1.outcome=timeout", "C11.outcome=syn", "!P5.p1=timeout|unreachable"]
     - ["P1.outcome=timeout", "S0.ssh=unreachable", "!P5.p1=timeout|unreachable"]
     - ["P1.outcome=timeout", "P6.reach=false", "P6.known=true", "!P5.p1=timeout|unreachable"]
   possible:
     - ["P1.outcome=timeout|unreachable", "!P5.p1=timeout|unreachable"]
   # SSH того же адреса отвечает — адрес доступен: это server.port.drop / path.port.
-  excluded: ["P1.outcome=ok", "S3.own=true", "N2.foreign_ok=false", "C10.outcome=ok", "P6.reach=true", "S0.ssh=ok"]
+  excluded: ["P1.outcome=ok", "S3.own=true", "N2.foreign_ok=false", "C10.outcome=ok", "P6.reach=true", "S0.ssh=ok", "C11.outcome=established"]
   title: "Адрес сервера недоступен: TCP до порта сервера не устанавливается"
   why: "Интернет есть (эталонные сайты открываются), а TCP-соединение с портом сервера не устанавливается ни с первой попытки, ни с повтора через 30 секунд."
   alternative: "Это похоже на блокировку адреса в сети провайдера, но то же даёт выключенный сервер, бан IP хостера, белый список мобильной сети или файрвол роутера. Различить — повтором из другой сети."
@@ -50,7 +52,7 @@
     - ["P1.outcome=timeout", "S0.ssh=ok", "P5.p1=ok"]
     - ["P1.outcome=timeout", "P6.reach=true", "S3.code=net.nosyn", "C7.syn_seen=true"]
     - ["S3.code=net.synack", "S3.ssh=true", "P6.reach=true"]
-  excluded: ["P1.outcome=ok", "C10.outcome=ok"]
+  excluded: ["P1.outcome=ok", "C10.outcome=ok", "C11.outcome=established"]
   title: "Сеть режет порт сервера: SSH того же адреса проходит"
   why: "SSH того же адреса из этой сети проходит, а порт сервера — нет, хотя из другой сети он открывается (или сервер не видит SYN из этой). Режут именно порт."
   actions:
@@ -124,8 +126,9 @@
 - code: path.freeze.fp
   possible:
     - ["C7.tls_hellos>=4"]
+    - ["C11.tls>=4"]
   title: "Много TLS-соединений к серверу за минуту — риск «заморозки по отпечатку»"
-  why: "Захват показал больше трёх TLS-хендшейков клиента к серверу за минуту. По отчётам (2026-05…06) это приводит к заморозке на 2–10 минут."
+  why: "Клиент открыл к серверу больше трёх TLS-соединений за минуту (захват ClientHello или таблица соединений Windows). По отчётам (2026-05…06) это приводит к заморозке на 2–10 минут."
   actions: ["Не жать «Подключить» многократно; подождать 2–3 минуты", "XHTTP с xmux по умолчанию держит до трёх соединений — не трогать без замера"]
 
 # N4 молчит после ClientHello, а N5 (тот же SNI на адрес эталона) тоже: режут по SNI. Находка —

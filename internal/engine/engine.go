@@ -115,6 +115,9 @@ type Engine struct {
 	// SSHConfig — ~/.ssh/config (только Host/HostName/Port/Include): алиас сервера по адресу
 	// профиля, если в настройках его нет. nil — не искать (тесты).
 	SSHConfig func() *bridge.SSHConfig
+	// Conns — таблица TCP-соединений ОС (C11: шлёт ли клиент к серверу; выбор профиля по живым
+	// соединениям клиента; хендшейки клиента в бюджете). nil — не смотреть (тесты).
+	Conns func() ([]osw.Conn, error)
 
 	mu      sync.Mutex
 	running bool
@@ -157,7 +160,7 @@ func New(st *store.Store) (*Engine, error) {
 		return nil, err
 	}
 	e := &Engine{Rules: re, Store: st, Adapters: clients.All(), CollectOS: osw.Collect, RunRef: refcore.Run,
-		LocalOpen: netprobe.LocalListening, ProbeClient: netprobe.ProbeViaClient}
+		LocalOpen: netprobe.LocalListening, ProbeClient: netprobe.ProbeViaClient, Conns: osw.TCPTable}
 	e.NewEnv = func(f *osw.Facts) *clients.Env { return clients.DefaultEnv(f, re.Compat) }
 	e.NewSSH = func(alias string) (SSHBridge, error) { return bridge.NewSSH(alias) }
 	e.SSHPort = func(ctx context.Context, alias string) int {
@@ -249,6 +252,8 @@ type run struct {
 	need []string // коды taxonomy.yaml: missing — чего не хватило (в порядке появления)
 
 	tl clients.Timeline // хронология логов клиента (C6) — для сверки с журналом здоровья (S2)
+
+	watch *connWatch // соединения клиента с сервером: от запроса через клиент (C10) до конца фазы 2
 }
 
 // missing — сеансу не хватило настройки или данных, и это изменило бы вывод.
@@ -304,6 +309,7 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 		r.red.Keep(hst)
 	}
 	defer func() {
+		r.watch.stop()
 		if r.budget != nil {
 			r.budget.OnChange(nil)
 		}
@@ -315,6 +321,9 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 		if ctx.Err() == nil {
 			r.phase2(ctx)
 		}
+		// Хендшейки клиента считаются, пока идут пробы к серверу; в окне сервера (фаза 3) xdiag к
+		// нему не обращается.
+		r.watch.stop()
 		if ctx.Err() == nil {
 			r.otherNetwork()
 		}

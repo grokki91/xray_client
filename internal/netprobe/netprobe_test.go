@@ -44,6 +44,44 @@ func TestBudgetWindows(t *testing.T) {
 	}
 }
 
+// TLS-хендшейки самого клиента к тому же серверу — в окне TLS для ожидания слота: пробы
+// приложения поверх них не выводят сумму за 3 в минуту («заморозка по отпечатку» считает все
+// хендшейки с адреса ПК). Проба, уже дождавшаяся слота, из-за них отказа не получает; в TCP-лимит
+// приложения и в снимок между запусками они не входят.
+func TestBudgetCountsClientHandshakes(t *testing.T) {
+	now := time.Unix(3_000_000, 0)
+	b := NewBudget()
+	b.now = func() time.Time { return now }
+	b.Observe(now.Add(-10 * time.Second))
+	b.Observe(now.Add(-5 * time.Second))
+	if b.WaitTLS() != 0 {
+		t.Fatal("два TLS клиента за минуту — третий ещё можно")
+	}
+	if err := b.Acquire(TLS); err != nil {
+		t.Fatalf("третий TLS за минуту: %v", err)
+	}
+	if w := b.WaitTLS(); w != 50*time.Second {
+		t.Fatalf("четвёртый — когда из окна уйдёт первый хендшейк клиента: %v", w)
+	}
+	if !b.Can(TLS) || !b.Can(TCP) {
+		t.Fatal("отказ проба получает только по своим соединениям")
+	}
+	u := b.Usage()
+	if u.TLS != 3 || u.Client != 2 || u.TotalClient != 2 || u.TotalTLS != 1 || u.WaitSec != 51 {
+		t.Fatalf("расход: %+v", u)
+	}
+	if s := b.Snapshot(); len(s.TLS) != 1 {
+		t.Fatalf("в снимок — только свои пробы: %+v", s)
+	}
+	if d := b.Usage().Since(Usage{TotalClient: 1}); d.TotalClient != 1 {
+		t.Fatalf("за сеанс: %+v", d)
+	}
+	now = now.Add(51 * time.Second)
+	if err := b.Acquire(TLS); err != nil {
+		t.Fatalf("первый хендшейк клиента вышел из окна: %v", err)
+	}
+}
+
 // Окно живёт долго и каждый сеанс восстанавливает снимок из файла: тот же снимок не должен
 // удваивать счётчик (было: второй сеанс подряд — «бюджет исчерпан» без единой пробы).
 func TestBudgetRestoreIdempotentAndWait(t *testing.T) {

@@ -145,6 +145,9 @@ func Build(s *engine.SessionData) View {
 	if b.Refused > 0 {
 		vw.Budget += fmt.Sprintf("; пропущено по лимиту: %d", b.Refused)
 	}
+	if b.TotalClient > 0 {
+		vw.Budget += fmt.Sprintf("; сам клиент за это время — %d TLS (в том же лимите)", b.TotalClient)
+	}
 	return vw
 }
 

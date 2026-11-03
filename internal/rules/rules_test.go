@@ -156,6 +156,24 @@ func TestScenarios(t *testing.T) {
 		{"чужой сертификат, маску по её адресу не проверить", append([]evidence.Evidence{ev("N1", "ok", true), ev("N2", "ru_ok", true, "foreign_ok", true),
 			ev("N4", "ok", false, "stage", "dns"), ev("C3", "found", true)}, append(screen7(), hiddify())...), "unknown.need_window", None},
 		{"чужой сертификат, а мост говорит: SNI тот же", with(append(screen7(), hiddify(), ev("S1", "ok", true, "match_sni", true, "match_pbk", false))...), "profile.pbk", Confirmed},
+		// Скрин 8 (2026-11-03): Hiddify «Подключение…», TCP до порта — за 7 с, ClientHello то
+		// молчит, то проходит. Окна сервера с этого сервера нет (снятое — с другого), шлёт ли
+		// клиент — не видно: причину не назвать. Таблица соединений (C11) это различает.
+		{"скрин 8: TCP за 7 с, ClientHello то молчит, то проходит", with(append(screen8(), hiddify())...), "unknown.need_window", None},
+		{"скрин 8 и клиент не открыл к серверу ни одного соединения", with(append(screen8(), hiddify(), ev("C11", "outcome", "none", "other", 0))...),
+			"client.nosend", Likely},
+		{"скрин 8 и SYN клиента без ответа — дело не в клиенте", with(append(screen8(), hiddify(), ev("C11", "outcome", "syn", "syn_only", 2))...),
+			"unknown.need_window", None},
+		{"клиент не шлёт, эталон дошёл до сервера", with(hiddify(), ev("C3", "found", true, "server_is_ip", true), ev("C10", "listening", true, "outcome", "fail"),
+			ev("C11", "outcome", "none"), ev("P1", "outcome", "ok"), ev("P3", "outcome", "ok"), ev("P3m", "outcome", "real_cert")), "client.nosend", Confirmed},
+		{"клиент не шлёт, профиль с доменом — только возможно", with(v2rayn("chrome", true), ev("C3", "found", true, "server_is_ip", false),
+			ev("C10", "listening", true, "outcome", "fail"), ev("C11", "outcome", "none")), "unknown.need_window", None},
+		{"порт молчит, SYN самого клиента тоже без ответа", with(v2rayn("chrome", true), ev("P1", "outcome", "timeout"), ev("C11", "outcome", "syn")),
+			"path.ip.unreachable", Likely},
+		{"порт молчит, SSH открыт, SYN клиента без ответа", with(hiddify(), ev("P1", "outcome", "timeout"), ev("P6", "outcome", "ok", "reach", true),
+			ev("C11", "outcome", "syn")), "server.port.drop", Likely},
+		{"порт молчит дважды, а TCP клиента установился — адрес доступен", with(v2rayn("chrome", true), ev("P1", "outcome", "timeout"),
+			ev("P4", "tcp", "timeout"), ev("C11", "outcome", "established")), "unknown.need_window", None},
 	}
 	for _, c := range cases {
 		v := e.Decide(evidence.FromList(c.evs))
@@ -378,9 +396,68 @@ func TestScreen7(t *testing.T) {
 	}
 }
 
+// screen8 — улики живого случая 2026-11-03: Hiddify 4.1.1 «Подключение…» (запрос через него —
+// таймаут), TCP до порта сервера — за 7 с (повторы SYN), эталон и обычный TLS с SNI маски —
+// тишина после ClientHello, повтор через 30 с — TCP за 1 с и сертификат маски, SSH того же
+// адреса (Host из ~/.ssh/config) отвечает, маска по своему адресу открывается (N4 — в base()).
+func screen8() []evidence.Evidence {
+	return []evidence.Evidence{
+		ev("C3", "found", true, "issues", []string{}, "transport", "xhttp", "server_is_ip", true),
+		ev("C8", "client_running", true, "core_listening", true),
+		ev("C10", "listening", true, "outcome", "fail", "error", "timeout", "shows", "connecting"),
+		ev("P1", "outcome", "ok", "ms", 7093),
+		ev("P3", "outcome", "handshake_timeout"),
+		ev("P2", "outcome", "hello_timeout"),
+		ev("P6", "outcome", "ok", "reach", true, "banner", true, "known", true, "source", "config"),
+		ev("P4", "tcp", "ok", "tls", "mask_cert"),
+	}
+}
+
+// Скрин 8: «шлёт ли Hiddify при „Подключение…“ хоть что-то на сервер» — ответ на ПК, до окна
+// сервера. Не шлёт — причина в клиенте, выше любых наблюдений сервера, а окно сервера не
+// советуется: оно ничего не покажет. Шлёт — «не шлёт» в «Исключено», и окно — с сервера этого
+// профиля.
+func TestScreen8(t *testing.T) {
+	e, _ := Load()
+	set := func(c11 ...any) *evidence.Set {
+		return evidence.FromList(append(append(base(), hiddify()), append(screen8(), ev("C11", c11...))...))
+	}
+	v := e.Decide(set("outcome", "none", "other", 1))
+	if v.Main.Code != "client.nosend" || !strings.Contains(v.Main.Why, "других его профилей за это время: 1") {
+		t.Fatalf("не шлёт: %s %q", v.Main.Code, v.Main.Why)
+	}
+	// Первая проверка — сам клиент (его логи): окно сервера при молчащем клиенте ничего не
+	// покажет и идёт только после — от возможных причин на сервере и пути.
+	if len(v.NextChecks) == 0 || v.NextChecks[0].ID != "C6" {
+		t.Fatalf("клиент не шлёт — сначала его логи: %+v", v.NextChecks)
+	}
+	for _, o := range []string{"syn", "established"} {
+		v = e.Decide(set("outcome", o))
+		ruled := false
+		for _, r := range v.RuledOut {
+			ruled = ruled || r.Code == "client.nosend"
+		}
+		if !ruled {
+			t.Errorf("%s: «клиент не шлёт» не исключено", o)
+		}
+		if len(v.NextChecks) == 0 || v.NextChecks[0].ID != "S3" || !strings.Contains(v.NextChecks[0].Text, "этого профиля") {
+			t.Errorf("%s: окно сервера — с сервера этого профиля: %+v", o, v.NextChecks)
+		}
+	}
+	// Много хендшейков клиента за запрос — риск «заморозки по отпечатку» среди возможных.
+	v = e.Decide(set("outcome", "established", "tls", 5))
+	found := false
+	for _, r := range v.Possible {
+		found = found || r.Code == "path.freeze.fp"
+	}
+	if !found {
+		t.Fatalf("5 хендшейков клиента за запрос: %v", codes(v.Possible))
+	}
+}
+
 func TestMissingTexts(t *testing.T) {
 	e, _ := Load()
-	for _, k := range []string{"ssh_port", "ssh_port22", "reference_off", "client_logs"} {
+	for _, k := range []string{"ssh_port", "ssh_port22", "reference_off", "client_logs", "doctor_other_server", "bridge_other_server"} {
 		if e.MissingText(k) == "" {
 			t.Errorf("нет текста missing.%s", k)
 		}

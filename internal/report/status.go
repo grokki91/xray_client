@@ -134,6 +134,10 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 		srv.State, srv.Note = "ok", "отвечает сайтом-маской"
 	case strings.HasSuffix(str("P2", "outcome"), "_after_hello") || str("P2", "outcome") == "hello_timeout":
 		srv.State, srv.Note = "fail", "ClientHello не проходит"
+		if str("P4", "tls") == "mask_cert" {
+			// Повтор через 30 с получил маску: не блокировка ClientHello, а перебои.
+			srv.Note = "перебои: ClientHello то без ответа, то проходит"
+		}
 	default:
 		srv.State, srv.Note = "ok", fmt.Sprintf("TCP есть (%d мс)", num("P1", "ms"))
 	}
@@ -182,6 +186,15 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 			cl.State, cl.Note = "fail", "подключается, трафик не идёт"
 			if connecting {
 				cl.Note = "«Подключение…»: трафик не идёт"
+			}
+			// Что клиент делал с сервером (таблица соединений Windows, C11).
+			switch str("C11", "outcome") {
+			case "none":
+				cl.Note += "; к серверу не шлёт"
+			case "syn":
+				cl.Note += "; SYN к серверу без ответа"
+			case "established":
+				cl.Note += "; TCP с сервером есть"
 			}
 		case "freeze":
 			cl.State, cl.Note = "warn", "подключён, загрузка встаёт"
@@ -233,6 +246,10 @@ func stages(s *engine.SessionData, m rules.Result) []Stage {
 	// Красное — только там, где причина: клиент без связи с сервером «не работает» как
 	// следствие, а не как вторая поломка. Следствие чего — словами, а не голым «следствие».
 	for i := anchor + 1; anchor >= 0 && i < len(chain); i++ {
+		// Клиент, который к серверу не шлёт вовсе, — не следствие сбоя сервера: сломан сам.
+		if chain[i] == &cl && str("C11", "outcome") == "none" {
+			continue
+		}
 		if chain[i].State == "fail" {
 			why := map[string]string{"net": "нет интернета", "server": "нет связи с сервером", "profile": "сервер не принял профиль"}[chain[anchor].Key]
 			if chain[anchor].Key == "profile" && set.Get("C3") != nil && !set.Get("C3").Bool("found") {
