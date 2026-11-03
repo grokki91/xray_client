@@ -58,6 +58,11 @@
 9. **Окно без CLI Wails:** фронтенд — статические HTML/CSS/JS без сборщика, встраиваются
    `embed`; сборка `go build -tags desktop,production`. DPI-осведомлённость включается кодом;
    иконка, манифест и версия файла — go-winres в CI (`build.ps1` — локально).
+   Проверка ветки или PR на Windows — `try-pr.ps1 <номер PR|ветка>`: сборка CI этого
+   коммита (через `gh` или `GH_TOKEN` — артефакты Actions без входа GitHub не отдаёт), иначе
+   сборка из исходников через `build.ps1`; суммы — по `SHA256SUMS.txt`. Файлы `.ps1` — в
+   UTF-8 с BOM: без него Windows PowerShell 5.1 читает кириллицу в ANSI и ломается на
+   «кавычках» (тест в `internal/repocheck`).
 
 10. **Исправления по живому запуску (2026-11-01, Windows 11, Hiddify 4.1.1, четыре сценария).**
     - Факты Windows не собирались ни разу: скрипт шёл в `powershell -Command -` через stdin,
