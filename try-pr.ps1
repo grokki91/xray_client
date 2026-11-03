@@ -98,7 +98,8 @@ function Build-FromSource {
   Push-Location $src
   try {
     if ((Run git @('init', '-q')) -ne 0) { Fail 'git init не удался.' }
-    if ((Run git @('fetch', '-q', '--depth', '1', "https://github.com/$Repo.git", $what)) -ne 0) { Fail "git fetch $what не удался." }
+    # Полная история и main: номер версии считается по порядку слияний (internal/version).
+    if ((Run git @('fetch', '-q', "https://github.com/$Repo.git", $what, 'refs/heads/main:refs/remotes/origin/main')) -ne 0) { Fail "git fetch $what не удался." }
     if ((Run git @('checkout', '-q', 'FETCH_HEAD')) -ne 0) { Fail 'git checkout не удался.' }
     $ps = (Get-Process -Id $PID).Path
     if ((Run $ps @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $src 'build.ps1'))) -ne 0) { Fail 'build.ps1 завершился с ошибкой.' }

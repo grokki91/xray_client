@@ -25,6 +25,7 @@
 | Отчёт в 5 блоков, «Подробно», экспорт без секретов | `internal/report` | unit |
 | CLI `xdiag`, окно `xdiag-ui` (Wails v2 + WebView2) | `cmd/` | сборка под Windows; фронтенд — в Chromium с подставным API |
 | Вкладка «Настройки»: блоки «Сервер / VPN-клиенты / Диагностика / История и экспорт», состояние профиля, алиаса и папок клиентов без сети (по значениям формы), мост — по кнопке (`xm bridge facts`, звено отказа) | `internal/setup`, `clients.CheckDir`, `cmd/xdiag-ui` | unit (подставные мост и каталоги); окно — в Chromium с подставным API |
+| Версия из файлов `changes/*.md` по порядку слияний в main (без общего файла с номером — без конфликтов), проверка файла в PR, номер в exe (`winres`), вкладка «О программе» | `internal/version`, `cmd/version`, `cmd/xdiag-ui` | unit на временном git: параллельные ветки, порядок слияний, shallow; окно — в Chromium с подставным API |
 | Нестабильность во времени (решение 16): серии сбоев через сервер в логах клиента за сутки, сверка с инцидентами `xm health` (S2) по часам сервера, находки `unstable.drops`, `server.episodes`, `path.freeze.episodes` | `clients.Timeline`, `engine.healthTimeline`, `rules/hypotheses/time.yaml` | unit: разбор времени sing-box/Xray, серии и пороги, слияние со вставленными логами, поправка часов по S1, уровни находок |
 | Проверка репозитория на данные установки (как `tests/check.sh` сервера) | `internal/repocheck` | в `go test ./...`; хук `.claude/hooks/commit-guard.sh` — до commit/push |
 
