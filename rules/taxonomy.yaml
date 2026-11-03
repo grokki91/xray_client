@@ -70,6 +70,7 @@ codes:
   lan.dns.spoof:         {layer: L2, order: 953, title: "Провайдер подменяет DNS"}
   lan.ipv6.leak:         {layer: L2, order: 954, title: "IPv6 мимо тоннеля"}
   beyond.ru_direct:      {layer: L6, order: 955, title: "Российские сайты через тоннель закрыты"}
+  beyond.udp:            {layer: L6, order: 958, title: "UDP через тоннель не проходит"}
   path.sni:              {layer: L3, order: 956, title: "SNI маски режется в этой сети"}
   server.ssh.silent:     {layer: L4, order: 957, title: "SSH сервера отсюда недоступен"}
   # Итоги без причины.

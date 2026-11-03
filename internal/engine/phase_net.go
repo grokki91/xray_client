@@ -582,6 +582,8 @@ func (r *run) reference(ctx context.Context) string {
 		return refcore.Options{Profile: r.prof, Fingerprint: fp, ServerIPs: r.serverIP, Dialer: r.dial, Resolver: r.res, Budget: r.budget,
 			Probe204: h.Tunnel.Probe204, Download: h.Tunnel.Download, DownloadBytes: h.Tunnel.DownloadBytes, Extra: ex}
 	}
+	p3 := opts("chrome", extra)
+	p3.UDPDNS, p3.UDPName = h.Tunnel.UDPDNS, h.Tunnel.UDPName
 	r.step(2, "P3", refTitle, "run", "")
 	if !r.slot(ctx, netprobe.TLS, "P3", refTitle) {
 		if ctx.Err() != nil {
@@ -592,7 +594,7 @@ func (r *run) reference(ctx context.Context) string {
 		r.step(2, "P3", refTitle, "skip", refText(refcore.Result{Outcome: "budget"}))
 		return "budget"
 	}
-	res := r.e.RunRef(ctx, opts("chrome", extra))
+	res := r.e.RunRef(ctx, p3)
 	for _, l := range res.Logs {
 		if strings.Contains(l, "REALITY") || strings.Contains(l, "failed") || strings.Contains(l, "x509") {
 			r.sess.Logs = append(r.sess.Logs, r.red.String("эталон: "+l))
@@ -614,6 +616,13 @@ func (r *run) reference(ctx context.Context) string {
 			okR := res.Extra["ru"]
 			r.put(evidence.Evidence{ID: "B2", Source: evidence.FromReference, Reliability: evidence.High,
 				Facts: map[string]any{"ran": true, "ru_ok": okR}, Summary: "Российский сайт через тоннель: " + yesno(okR, "открывается", "закрыт (правило сервера или блокировка)")})
+		}
+		// B4: «budget» — UDP не проверен (нужно было новое соединение к серверу), улики нет.
+		if res.UDP == "ok" || res.UDP == "no_answer" {
+			okU := res.UDP == "ok"
+			r.put(evidence.Evidence{ID: "B4", Source: evidence.FromReference, Reliability: evidence.High,
+				Facts:   map[string]any{"udp_ok": okU, "outcome": res.UDP, "ms": res.UDPMs},
+				Summary: "UDP через тоннель (DNS-запрос к публичному резолверу): " + yesno(okU, fmt.Sprintf("ответ за %d мс", res.UDPMs), "ответа нет")})
 		}
 	}
 	// P3m — только если ответ что-то меняет: клиент сам X25519MLKEM768 не шлёт.

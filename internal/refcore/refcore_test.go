@@ -23,7 +23,8 @@ func prof(t *testing.T, s *sim.Sim) *profile.Profile {
 func opts(s *sim.Sim, p *profile.Profile, fp string, b *netprobe.Budget) Options {
 	return Options{Profile: p, Fingerprint: fp, ServerIPs: []net.IP{net.ParseIP("127.0.0.1")}, Budget: b,
 		Probe204: s.URL("/generate_204"), Download: s.URL("/down?bytes=65536"), DownloadBytes: 65536,
-		Extra: map[string]string{"latency_url": s.URL("/generate_204")}, Timeout: 30 * time.Second, Stall: 3 * time.Second}
+		Extra: map[string]string{"latency_url": s.URL("/generate_204")}, UDPDNS: s.DNS, UDPName: "www.example.com",
+		Timeout: 30 * time.Second, Stall: 3 * time.Second}
 }
 
 func TestReferenceProbe(t *testing.T) {
@@ -37,12 +38,13 @@ func TestReferenceProbe(t *testing.T) {
 	defer s.Close()
 	ctx := context.Background()
 
-	t.Run("chrome проходит, 204 и 64 КБ", func(t *testing.T) {
+	t.Run("chrome проходит, 204 и 64 КБ, UDP через тоннель", func(t *testing.T) {
 		b := netprobe.NewBudget()
 		r := Run(ctx, opts(s, prof(t, s), "chrome", b))
-		if r.Outcome != "ok" || r.Status != 204 || r.Bytes < 65536 || r.Freeze != "none" || !r.Extra["latency_url"] {
+		if r.Outcome != "ok" || r.Status != 204 || r.Bytes < 65536 || r.Freeze != "none" || !r.Extra["latency_url"] || r.UDP != "ok" {
 			t.Fatalf("%+v\n%s", r, strings.Join(r.Logs, "\n"))
 		}
+		// UDP-проба идёт по тому же соединению XHTTP: нового TLS к серверу нет.
 		if r.Conns != 1 || b.Usage().TotalTLS != 1 {
 			t.Fatalf("к серверу должно быть одно TLS-соединение: conns=%d budget=%+v", r.Conns, b.Usage())
 		}
@@ -101,6 +103,26 @@ func TestReferenceProbe(t *testing.T) {
 			t.Fatalf("%+v", r)
 		}
 	})
+}
+
+// Сервер отправляет UDP из тоннеля в blackhole: TCP через тоннель работает, DNS по UDP — нет.
+func TestReferenceUDPBlocked(t *testing.T) {
+	if testing.Short() {
+		t.Skip("сетевой симулятор")
+	}
+	s, err := sim.StartWith(sim.Options{BlockUDP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	b := netprobe.NewBudget()
+	r := Run(context.Background(), opts(s, prof(t, s), "chrome", b))
+	if r.Outcome != "ok" || r.UDP != "no_answer" {
+		t.Fatalf("%+v\n%s", r, strings.Join(r.Logs, "\n"))
+	}
+	if r.Conns != 1 || b.Usage().TotalTLS != 1 {
+		t.Fatalf("conns=%d budget=%+v", r.Conns, b.Usage())
+	}
 }
 
 func TestReferenceTCPFailures(t *testing.T) {

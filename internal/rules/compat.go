@@ -198,6 +198,8 @@ type Hosts struct {
 		Download      string `yaml:"download"`
 		DownloadBytes int    `yaml:"download_bytes"`
 		RUProbe       string `yaml:"ru_probe"`
+		UDPDNS        string `yaml:"udp_dns"`
+		UDPName       string `yaml:"udp_name"`
 	} `yaml:"through_tunnel"`
 	Bootstrap []string `yaml:"bootstrap_resolvers"`
 }
