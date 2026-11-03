@@ -21,6 +21,7 @@
 | Мост: `ssh.exe … sudo -n xm bridge facts|doctor|health`, allowlist, контракт `schema`, ручной импорт `doctor.json`/`health.json` | `internal/bridge` | unit: разбор формата `doctor.py`, отказ чужих команд и алиасов-опций |
 | Оркестратор: фазы 0–4, согласия, окно, P4, P5 «из другой сети» | `internal/engine` | сквозные тесты с симулятором |
 | Хранилище под DPAPI, история, срок хранения, README с ручной расшифровкой | `internal/store` | unit (DPAPI — на Windows в CI) |
+| Повтор истории на текущих правилах: `xdiag history replay [ID|--all]` — улики сеанса (DPAPI) → `rules.Decide` сборки → было / стало (код, уровень); без сети и записи, вывод — только метки | `engine.Replay`, `cmd/xdiag` | unit: изменившийся, совпавший и нечитаемый сеанс, файлы истории не тронуты; сквозной — повтор сеанса симулятора без изменений |
 | Отчёт в 5 блоков, «Подробно», экспорт без секретов | `internal/report` | unit |
 | CLI `xdiag`, окно `xdiag-ui` (Wails v2 + WebView2) | `cmd/` | сборка под Windows; фронтенд — в Chromium с подставным API |
 | Вкладка «Настройки»: блоки «Сервер / VPN-клиенты / Диагностика / История и экспорт», состояние профиля, алиаса и папок клиентов без сети (по значениям формы), мост — по кнопке (`xm bridge facts`, звено отказа) | `internal/setup`, `clients.CheckDir`, `cmd/xdiag-ui` | unit (подставные мост и каталоги); окно — в Chromium с подставным API |

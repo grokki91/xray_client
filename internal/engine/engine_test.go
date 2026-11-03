@@ -215,6 +215,10 @@ func TestHiddifyAgainstMlkemServer(t *testing.T) {
 	if l := e.Store.Sessions(); len(l) != 1 || l[0].Code != "client.core.mlkem" {
 		t.Fatalf("история: %+v", l)
 	}
+	// Повтор на тех же правилах: улики после JSON и DPAPI дают тот же вердикт.
+	if l := e.ReplayHistory(); len(l) != 1 || l[0].Changed || l[0].Err != "" || l[0].Now.Code != "client.core.mlkem" {
+		t.Fatalf("повтор: %+v", l)
+	}
 }
 
 // Профиль из настроек, клиентов нет, сервер пускает — «работает».
