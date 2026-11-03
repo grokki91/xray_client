@@ -83,6 +83,21 @@ func TestScenarios(t *testing.T) {
 		// Обязательный негатив §12.1: таймаут без интернета — не блокировка.
 		{"таймаут без интернета", []evidence.Evidence{ev("N1", "ok", false, "hosts_ok", 0), ev("N4", "ok", false),
 			ev("C3", "found", true), v2rayn("chrome", true), ev("P1", "outcome", "timeout"), ev("P4", "tcp", "timeout")}, "lan.noinet", Confirmed},
+		// Скрин 8 (2026-11-03): «после диагностики пропадает весь интернет, даже белые списки». Маршрут
+		// по умолчанию и маршрут к серверу — у другого VPN (WireGuard), Hiddify — только прокси; пробы
+		// мимо тоннеля (физический адаптер) не открыли ни одного сайта, TCP к серверу — локальная
+		// ошибка. Интернет мимо тоннеля и через него различает только повтор с выключенным VPN: не
+		// «подтверждено нет интернета, перезагрузить роутер», а «весь трафик — через другой VPN».
+		{"скрин 8: мимо чужого VPN сайты не открываются", []evidence.Evidence{ev("N1", "ok", false, "hosts_ok", 0, "hosts", 4, "bound", true),
+			ev("N2", "ru_ok", false, "foreign_ok", false), ev("N4", "ok", false, "stage", "dns"), ev("C3", "found", true, "transport", "xhttp"),
+			hiddify(), ev("C8", "client_running", true, "core_listening", true), ev("W1", "tun_adapters", []string{}, "other_vpn", []string{"WireGuard Tunnel"}, "default_via_tun", true),
+			ev("W2", "iface_kind", "vpn", "via_tun", true, "loop", true), ev("P1", "outcome", "error"), ev("P4", "tcp", "error")}, "os.vpn.other", Likely},
+		{"скрин 8 без профиля: TUN клиента нет, другой VPN поднят", []evidence.Evidence{ev("N1", "ok", false, "hosts_ok", 0, "bound", true),
+			ev("N4", "ok", false), ev("W1", "tun_adapters", []string{}, "other_vpn", []string{"WireGuard Tunnel"}, "default_via_tun", true)}, "os.vpn.other", Likely},
+		// Мимо TUN самого клиента пробы тоже могут быть закрыты (strict_route sing-box закрывает порт 53
+		// всем, кроме ядра): без чужого VPN — «нет интернета», но не «подтверждено».
+		{"нет интернета мимо TUN клиента", []evidence.Evidence{ev("N1", "ok", false, "hosts_ok", 0, "bound", true), ev("N4", "ok", false),
+			ev("W1", "tun_adapters", []string{"HiddifyTunnel"}, "other_vpn", []string{}, "default_via_tun", true)}, "lan.noinet", Likely},
 		// Строка 5 — ClientHello режется.
 		{"hello режется", with(v2rayn("chrome", true), ev("P1", "outcome", "ok"), ev("P2", "outcome", "hello_timeout"),
 			ev("P4", "tls", "hello_timeout"), ev("P3", "outcome", "handshake_timeout")), "path.hello", Likely},

@@ -186,6 +186,10 @@ func install() {
 
 // ─── Проба ───────────────────────────────────────────────────────────────────
 
+// CoreVersion — версия Xray-core эталона («26.7.28»): по ней compat.yaml говорит, с какими
+// пресетами отпечатка эталон шлёт X25519MLKEM768.
+func CoreVersion() string { return core.Version() }
+
 // Run выполняет пробу. Ошибки не возвращает: всё — в Result.Outcome.
 func Run(ctx context.Context, o Options) Result {
 	runMu.Lock()

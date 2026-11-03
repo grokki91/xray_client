@@ -14,6 +14,7 @@ layers:
   "-": Итог
 
 codes:
+  os.vpn.other:          {layer: L1, order: 99,  title: "Windows: весь трафик — через другой VPN, мимо него сайты не открываются"}
   lan.noinet:            {layer: L2, order: 100, title: "Нет интернета"}
   profile.missing:       {layer: L5, order: 110, title: "Профиль не найден"}
   profile.unsupported:   {layer: L5, order: 112, title: "Профиль не поддерживается (не VLESS + REALITY)"}

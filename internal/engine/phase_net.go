@@ -54,7 +54,7 @@ func (r *run) phase1(ctx context.Context) {
 				maskErr = "имя маски не резолвится"
 				return
 			}
-			t := netprobe.ProbeTLS(ctx, r.dial, nil, net.JoinHostPort(ips[0].String(), "443"), r.prof.SNI, 10*time.Second)
+			t := netprobe.ProbeTLS(ctx, r.dial, nil, net.JoinHostPort(ips[0].String(), "443"), r.prof.SNI, r.clientFP(), 10*time.Second)
 			mask = &t
 		}()
 	}
@@ -144,7 +144,7 @@ func (r *run) sniElsewhere(ctx context.Context, h *rules.Hosts, results []netpro
 		r.step(1, "N5", title, "skip", "адрес эталона не резолвится")
 		return
 	}
-	t := netprobe.ProbeTLS(ctx, r.dial, nil, net.JoinHostPort(ips[0].String(), port), r.prof.SNI, 8*time.Second)
+	t := netprobe.ProbeTLS(ctx, r.dial, nil, net.JoinHostPort(ips[0].String(), port), r.prof.SNI, r.clientFP(), 8*time.Second)
 	if strings.HasPrefix(t.Outcome, "tcp_") {
 		r.step(1, "N5", title, "skip", tlsText(t.Outcome, false))
 		return
@@ -213,7 +213,8 @@ func (r *run) phase2(ctx context.Context) {
 		return
 	}
 	if p1.Outcome != "ok" {
-		r.step(2, "P3", refTitle, "skip", "не выполнялось: TCP до сервера не установился")
+		fp, _ := r.refFP()
+		r.step(2, "P3", refTitle(fp), "skip", "не выполнялось: TCP до сервера не установился")
 		if p1.Outcome == "timeout" || p1.Outcome == "unreachable" {
 			r.sshPort(ctx, ip, false)
 		}
@@ -222,24 +223,36 @@ func (r *run) phase2(ctx context.Context) {
 	}
 
 	clientOK := r.set.Get("C10").Str("outcome") == "ok"
+	p2o, p2done := "", false
 	if r.o.Reference && r.prof.IsRealityVLESS() {
-		if o := r.reference(ctx); o == "ok" || o == "budget" || ctx.Err() != nil {
+		fp, change := r.refFP()
+		// Эталон шлёт не тот отпечаток, что клиент (пресет клиента без X25519MLKEM768 или
+		// random). По отчётам (landscape.md сервера, 2026-05…06) смена отпечатка к серверу во
+		// время заморозки продлевает её до 10 минут на любой TLS — и клиент «уходит в таймаут»
+		// уже из-за самой проверки. Поэтому сначала обычный TLS отпечатком клиента: ответа на
+		// ClientHello нет — эталон другим отпечатком не запускается.
+		if change {
+			var ok bool
+			if p2o, ok = r.probeP2(ctx, addr); !ok {
+				return
+			}
+			p2done = true
+		}
+		if p2done && isHelloFail(p2o) {
+			r.step(2, "P3", refTitle(fp), "skip", "не запускалось: TLS отпечатком клиента (fp="+r.clientFP()+") без ответа, а эталон шлёт fp="+fp+
+				" — смена отпечатка во время заморозки продлила бы её до 10 минут")
+		} else if o := r.reference(ctx, fp); o == "ok" || o == "budget" || ctx.Err() != nil {
 			return
 		}
 	} else if !r.o.Reference && !clientOK {
 		r.missing("reference_off")
 	}
-	r.step(2, "P2", "TLS к серверу с SNI маски", "run", "")
-	if !r.slot(ctx, netprobe.TLS, "P2", "TLS к серверу с SNI маски") {
-		r.step(2, "P2", "TLS к серверу с SNI маски", "skip", tlsText("budget", false))
-		return
+	if !p2done {
+		var ok bool
+		if p2o, ok = r.probeP2(ctx, addr); !ok {
+			return
+		}
 	}
-	p2 := netprobe.ProbeTLS(ctx, r.dial, r.budget, addr, r.prof.SNI, 10*time.Second)
-	p2o := tlsOutcome(p2)
-	r.put(evidence.Evidence{ID: "P2", Source: evidence.FromNetwork, Reliability: evidence.High,
-		Facts:   map[string]any{"outcome": p2o, "cert_valid": p2.CertValid, "ms": p2.Ms, "bytes_in": p2.BytesIn},
-		Summary: "Обычный TLS (fp chrome, SNI маски) на адрес сервера: " + tlsText(p2.Outcome, p2.CertValid)})
-	r.step(2, "P2", "TLS к серверу с SNI маски", stepStatus(p2o == "mask_cert"), tlsText(p2.Outcome, p2.CertValid))
 	// Эталон не прошёл и клиент не работает — вывод зависит от сервера: можно ли на него войти
 	// (свежий профиль, окно xm doctor) и жив ли адрес целиком. Только с известным портом SSH:
 	// порт 22 наугад при открытом порте сервера ничего не доказывает.
@@ -251,7 +264,53 @@ func (r *run) phase2(ctx context.Context) {
 	}
 }
 
-const refTitle = "Эталонное ядро Xray с профилем (fp chrome)"
+// probeP2 — обычный TLS отпечатком клиента и с SNI маски на адрес сервера. ok=false — проба не
+// выполнена (лимит проб к серверу или отмена).
+func (r *run) probeP2(ctx context.Context, addr string) (string, bool) {
+	r.step(2, "P2", "TLS к серверу с SNI маски", "run", "")
+	if !r.slot(ctx, netprobe.TLS, "P2", "TLS к серверу с SNI маски") {
+		r.step(2, "P2", "TLS к серверу с SNI маски", "skip", tlsText("budget", false))
+		return "", false
+	}
+	fp := r.clientFP()
+	p2 := netprobe.ProbeTLS(ctx, r.dial, r.budget, addr, r.prof.SNI, fp, 10*time.Second)
+	p2o := tlsOutcome(p2)
+	r.put(evidence.Evidence{ID: "P2", Source: evidence.FromNetwork, Reliability: evidence.High,
+		Facts:   map[string]any{"outcome": p2o, "cert_valid": p2.CertValid, "ms": p2.Ms, "bytes_in": p2.BytesIn, "fp": fp},
+		Summary: "Обычный TLS (fp " + fp + ", SNI маски) на адрес сервера: " + tlsText(p2.Outcome, p2.CertValid)})
+	r.step(2, "P2", "TLS к серверу с SNI маски", stepStatus(p2o == "mask_cert"), tlsText(p2.Outcome, p2.CertValid))
+	return p2o, ctx.Err() == nil
+}
+
+func refTitle(fp string) string {
+	return "Эталонное ядро Xray с профилем (fp " + fp + ")"
+}
+
+// clientFP — отпечаток, которым шлёт ClientHello сам клиент: пресет профиля, пусто — chrome (как
+// у Xray). Им идут все TLS-пробы, кроме эталона с другим отпечатком (refFP) и P3m.
+func (r *run) clientFP() string {
+	fp := ""
+	if r.prof != nil {
+		fp = strings.ToLower(strings.TrimSpace(r.prof.Fingerprint))
+	}
+	if fp == "" {
+		return "chrome"
+	}
+	return fp
+}
+
+// refFP — отпечаток эталона P3: как у клиента, если ядро эталона шлёт с ним X25519MLKEM768 (на
+// этом держится пара P3 ↔ P3m и вывод «эталон с X25519MLKEM768 прошёл»), иначе chrome. change —
+// эталон шлёт к серверу другой отпечаток, чем клиент.
+func (r *run) refFP() (fp string, change bool) {
+	c := r.clientFP()
+	if r.e.Rules != nil && r.e.Rules.Compat != nil {
+		if m, known := r.e.Rules.Compat.XrayFPMlkem(refcore.CoreVersion(), c); known && m {
+			return c, false
+		}
+	}
+	return "chrome", c != "chrome"
+}
 
 // sshPort — P6: отвечает ли SSH-порт того же адреса. Порт сервера молчит (portOK=false) —
 // отвечает SSH: адрес не заблокирован целиком, молчит только порт сервера (файрвол сервера или
@@ -394,7 +453,7 @@ func (r *run) repeat(ctx context.Context, addr string) {
 	f := map[string]any{"tcp": t.Outcome}
 	sum := "Повтор: TCP — " + tcpText(t)
 	if t.Outcome == "ok" && r.budget.Can(netprobe.TLS) {
-		s := netprobe.ProbeTLS(ctx, r.dial, r.budget, addr, r.prof.SNI, 10*time.Second)
+		s := netprobe.ProbeTLS(ctx, r.dial, r.budget, addr, r.prof.SNI, r.clientFP(), 10*time.Second)
 		f["tls"] = tlsOutcome(s)
 		sum += "; TLS — " + tlsText(s.Outcome, s.CertValid)
 	} else if t.Outcome != "ok" {
@@ -567,9 +626,11 @@ func (r *run) routeEvidence(ip string) {
 		Summary: "Маршрут к серверу: через " + a.Kind + yesno(loop, " — чужой туннель перехватывает соединение с сервером", "")})
 }
 
-// reference — P3 (fp chrome) и, если клиент X25519MLKEM768 не шлёт, P3m (fp edge — без него):
-// одна и та же попытка с одним отличием — доля X25519MLKEM768. Возвращает исход P3.
-func (r *run) reference(ctx context.Context) string {
+// reference — P3 (отпечаток fp из refFP — с X25519MLKEM768) и, если клиент X25519MLKEM768 не
+// шлёт, P3m (fp edge — без него): одна и та же попытка с одним отличием — доля X25519MLKEM768.
+// P3m — смена отпечатка, поэтому только после того, как P3 поднял тоннель (заморозки сейчас нет).
+// Возвращает исход P3.
+func (r *run) reference(ctx context.Context, fp string) string {
 	h := r.hosts()
 	extra := map[string]string{}
 	if r.active != nil && r.active.d.TestURL != "" {
@@ -582,16 +643,17 @@ func (r *run) reference(ctx context.Context) string {
 		return refcore.Options{Profile: r.prof, Fingerprint: fp, ServerIPs: r.serverIP, Dialer: r.dial, Resolver: r.res, Budget: r.budget,
 			Probe204: h.Tunnel.Probe204, Download: h.Tunnel.Download, DownloadBytes: h.Tunnel.DownloadBytes, Extra: ex}
 	}
-	p3 := opts("chrome", extra)
+	p3 := opts(fp, extra)
 	p3.UDPDNS, p3.UDPName = h.Tunnel.UDPDNS, h.Tunnel.UDPName
-	r.step(2, "P3", refTitle, "run", "")
-	if !r.slot(ctx, netprobe.TLS, "P3", refTitle) {
+	title := refTitle(fp)
+	r.step(2, "P3", title, "run", "")
+	if !r.slot(ctx, netprobe.TLS, "P3", title) {
 		if ctx.Err() != nil {
 			return "cancelled"
 		}
 		r.put(evidence.Evidence{ID: "P3", Source: evidence.FromReference, Reliability: evidence.High,
-			Facts: map[string]any{"outcome": "budget"}, Summary: refText(refcore.Result{Outcome: "budget"})})
-		r.step(2, "P3", refTitle, "skip", refText(refcore.Result{Outcome: "budget"}))
+			Facts: map[string]any{"outcome": "budget", "fp": fp}, Summary: refText(refcore.Result{Outcome: "budget"})})
+		r.step(2, "P3", title, "skip", refText(refcore.Result{Outcome: "budget"}))
 		return "budget"
 	}
 	res := r.e.RunRef(ctx, p3)
@@ -601,9 +663,9 @@ func (r *run) reference(ctx context.Context) string {
 		}
 	}
 	f := map[string]any{"outcome": res.Outcome, "freeze": res.Freeze, "status": res.Status, "ms_204": res.Ms204, "bytes": res.Bytes,
-		"socket_in": res.SocketIn, "conns": res.Conns}
+		"socket_in": res.SocketIn, "conns": res.Conns, "fp": fp}
 	r.put(evidence.Evidence{ID: "P3", Source: evidence.FromReference, Reliability: evidence.High, Facts: f, Summary: refText(res)})
-	r.step(2, "P3", refTitle, stepStatus(res.Outcome == "ok"), refText(res))
+	r.step(2, "P3", title, stepStatus(res.Outcome == "ok"), refText(res))
 	if res.Outcome == "ok" {
 		r.put(evidence.Evidence{ID: "B1", Source: evidence.FromReference, Reliability: evidence.High,
 			Facts: map[string]any{"dns_ok": true}, Summary: "Имена за тоннелем разрешаются (запрос по имени через сервер прошёл)"})
