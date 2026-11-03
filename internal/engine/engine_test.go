@@ -163,10 +163,12 @@ func TestHiddifyAgainstMlkemServer(t *testing.T) {
 	e.NewSSH = func(string) (SSHBridge, error) { return &fakeBridge{prof: p, doctor: doctor}, nil }
 
 	var steps []Step
-	var windows int
+	// Window движок зовёт в горутине (окно идёт параллельно xm doctor), а фальшивый мост отвечает
+	// сразу: Run может вернуться раньше хука, поэтому вызов ждём на канале, а не считаем счётчиком.
+	windows := make(chan struct{}, 4)
 	sess, err := e.Run(context.Background(), Options{Reference: true, Hosts: testHosts(s), Bridge: "ssh", SSHAlias: "xm-test", LiveSeconds: 10,
 		SkipRepeat: true}, Hooks{Progress: func(st Step) { steps = append(steps, st) },
-		Window: func(context.Context, string, int) { windows++ }})
+		Window: func(context.Context, string, int) { windows <- struct{}{} }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,8 +210,15 @@ func TestHiddifyAgainstMlkemServer(t *testing.T) {
 	if l := redact.Leaks(string(js)); len(l) > 0 {
 		t.Errorf("утечки: %v", l)
 	}
-	if windows != 1 {
-		t.Errorf("окно doctor: %d", windows)
+	select {
+	case <-windows:
+	case <-time.After(5 * time.Second):
+		t.Errorf("окно doctor: хук не вызван")
+	}
+	select {
+	case <-windows:
+		t.Errorf("окно doctor: хук вызван больше одного раза")
+	case <-time.After(100 * time.Millisecond):
 	}
 	if err := e.Save(sess); err != nil {
 		t.Fatal(err)
