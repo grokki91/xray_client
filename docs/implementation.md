@@ -24,7 +24,7 @@
 | Отчёт в 5 блоков, «Подробно», экспорт без секретов | `internal/report` | unit |
 | CLI `xdiag`, окно `xdiag-ui` (Wails v2 + WebView2) | `cmd/` | сборка под Windows; фронтенд — в Chromium с подставным API |
 | Вкладка «Настройки»: блоки «Сервер / VPN-клиенты / Диагностика / История и экспорт», состояние профиля, алиаса и папок клиентов без сети (по значениям формы), мост — по кнопке (`xm bridge facts`, звено отказа) | `internal/setup`, `clients.CheckDir`, `cmd/xdiag-ui` | unit (подставные мост и каталоги); окно — в Chromium с подставным API |
-| Проверка репозитория на данные установки (как `tests/check.sh` сервера) | `internal/repocheck` | в `go test ./...` |
+| Проверка репозитория на данные установки (как `tests/check.sh` сервера) | `internal/repocheck` | в `go test ./...`; хук `.claude/hooks/commit-guard.sh` — до commit/push |
 
 ## Отличия от проекта
 
