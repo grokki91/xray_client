@@ -60,16 +60,17 @@ func (a *App) shutdown(context.Context) {
 	a.Cancel()
 }
 
-// Info — версия и состояние для заголовка окна.
+// Info — версия и состояние для заголовка окна и «О программе».
 type Info struct {
 	Version   string `json:"version"`
+	Commit    string `json:"commit,omitempty"`
 	Error     string `json:"error,omitempty"`
 	DataDir   string `json:"data_dir"`
 	Protected bool   `json:"protected"`
 }
 
 func (a *App) Info() Info {
-	i := Info{Version: engine.Version}
+	i := Info{Version: engine.Version, Commit: engine.Commit}
 	if a.err != nil {
 		i.Error = a.err.Error()
 	}

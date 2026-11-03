@@ -137,6 +137,8 @@ func testHosts(s *sim.Sim) *rules.Hosts {
 	h.Tunnel.Probe204 = s.URL("/generate_204")
 	h.Tunnel.Download = s.URL("/down?bytes=65536")
 	h.Tunnel.DownloadBytes = 65536
+	h.Tunnel.UDPDNS = s.DNS
+	h.Tunnel.UDPName = "www.example.com"
 	return h
 }
 
@@ -215,6 +217,10 @@ func TestHiddifyAgainstMlkemServer(t *testing.T) {
 	if l := e.Store.Sessions(); len(l) != 1 || l[0].Code != "client.core.mlkem" {
 		t.Fatalf("история: %+v", l)
 	}
+	// Повтор на тех же правилах: улики после JSON и DPAPI дают тот же вердикт.
+	if l := e.ReplayHistory(); len(l) != 1 || l[0].Changed || l[0].Err != "" || l[0].Now.Code != "client.core.mlkem" {
+		t.Fatalf("повтор: %+v", l)
+	}
 }
 
 // Профиль из настроек, клиентов нет, сервер пускает — «работает».
@@ -238,6 +244,39 @@ func TestProfileOnlyOK(t *testing.T) {
 	}
 }
 
+// Issue #17: сервер режет UDP из тоннеля — итог «работает», находка beyond.udp, B4 без
+// лишнего TLS к серверу. С открытым UDP — B4.udp_ok=true и находки нет.
+func TestUDPThroughTunnel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("сетевой симулятор")
+	}
+	for _, block := range []bool{true, false} {
+		s, err := sim.StartWith(sim.Options{BlockUDP: block})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := testEngine(t, s, t.TempDir())
+		sess, err := e.Run(context.Background(), Options{Reference: true, Hosts: testHosts(s), ProfileURI: s.URI("chrome"), SkipRepeat: true}, Hooks{})
+		s.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b4 map[string]any
+		for _, x := range sess.Evidence {
+			if x.ID == "B4" {
+				b4 = x.Facts
+			}
+		}
+		found := false
+		for _, f := range sess.Verdict.Findings {
+			found = found || f.Code == "beyond.udp"
+		}
+		if sess.Verdict.Main.Code != "ok" || b4 == nil || b4["udp_ok"] != !block || found != block || sess.Budget.TotalTLS != 1 {
+			t.Fatalf("block=%v: %s, B4 %v, находка %v, бюджет %+v", block, sess.Verdict.Main.Code, b4, found, sess.Budget)
+		}
+	}
+}
+
 // Без сети и без профиля — быстро и без падения (§12.2 п. 1: вердикт за ≤ 15 с).
 func TestOfflineNoProfile(t *testing.T) {
 	root := t.TempDir()
@@ -249,6 +288,27 @@ func TestOfflineNoProfile(t *testing.T) {
 	}
 	if sess.Verdict.Main.Code != "unknown.need_window" && sess.Verdict.Main.Code != "profile.missing" {
 		t.Fatalf("%s", sess.Verdict.Main.Code)
+	}
+}
+
+// VLESS + TLS из настроек: профиль цел, но не REALITY — «не поддерживается», а не
+// «испорчен при импорте» (issue #15).
+func TestSettingsProfileNotReality(t *testing.T) {
+	root := t.TempDir()
+	e := testEngine(t, nil, root)
+	uri := "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443?encryption=none&security=tls&sni=example.com&type=xhttp&path=%2Fx#t"
+	sess, err := e.Run(context.Background(), Options{Offline: true, ProfileURI: uri}, Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := sess.Verdict.Main
+	if m.Code != "profile.unsupported" || !strings.Contains(m.Title, "VLESS + TLS") {
+		t.Fatalf("%s/%s: %s", m.Code, m.Level, m.Title)
+	}
+	for _, r := range append(append(sess.Verdict.Also, sess.Verdict.Possible...), m) {
+		if r.Code == "profile.import" {
+			t.Fatalf("profile.import при целом профиле: %+v", r)
+		}
 	}
 }
 

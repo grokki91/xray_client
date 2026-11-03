@@ -31,8 +31,12 @@ import (
 	"github.com/grokki91/xray_client/internal/store"
 )
 
-// Version — версия приложения (подставляется при сборке -ldflags).
-var Version = "dev"
+// Version — версия приложения, Commit — коммит сборки. Подставляются при сборке:
+// go build -ldflags "$(go run ./cmd/version -ldflags)" (номер — из changes/*.md).
+var (
+	Version = "dev"
+	Commit  = ""
+)
 
 // Options — что делать в сеансе.
 type Options struct {
@@ -243,6 +247,8 @@ type run struct {
 	budgetStart netprobe.Usage   // расход на начало сеанса — в отчёт идёт разница
 
 	need []string // коды taxonomy.yaml: missing — чего не хватило (в порядке появления)
+
+	tl clients.Timeline // хронология логов клиента (C6) — для сверки с журналом здоровья (S2)
 }
 
 // missing — сеансу не хватило настройки или данных, и это изменило бы вывод.

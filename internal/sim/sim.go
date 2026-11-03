@@ -1,6 +1,7 @@
 // Package sim — сетевой симулятор для тестов без живого сервера (docs/architecture.md §12.1):
 // настоящий Xray-core с VLESS+REALITY+XHTTP на петле, сайт-маска TLS 1.3 и цель за тоннелем
-// (204, загрузка N байт, загрузка с остановкой). Импортируется только тестами.
+// (204, загрузка N байт, загрузка с остановкой) и DNS-резолвер по UDP за тоннелем. Импортируется
+// только тестами.
 //
 // REALITY сервера — XTLS/REALITY 8cdf7bf (как в Xray v26.9.9+): ClientHello без
 // X25519MLKEM768 перед X25519 уходит маске — правило, на котором ломается Hiddify 4.x.
@@ -27,9 +28,13 @@ import (
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/infra/conf/serial"
 
+	"github.com/miekg/dns"
+
 	_ "github.com/xtls/xray-core/app/dispatcher"
 	_ "github.com/xtls/xray-core/app/proxyman/inbound"
 	_ "github.com/xtls/xray-core/app/proxyman/outbound"
+	_ "github.com/xtls/xray-core/app/router"
+	_ "github.com/xtls/xray-core/proxy/blackhole"
 	_ "github.com/xtls/xray-core/proxy/freedom"
 	_ "github.com/xtls/xray-core/proxy/vless/inbound"
 	_ "github.com/xtls/xray-core/transport/internet/reality"
@@ -52,18 +57,32 @@ type Sim struct {
 	PublicKey string // pbk для профиля
 	Target    string // host:port цели за тоннелем
 	Mask      string // host:port сайта-маски
+	DNS       string // host:port DNS-резолвера по UDP за тоннелем
+	opts      Options
 	closers   []func()
 }
 
-// Start поднимает маску, цель и сервер.
-func Start() (*Sim, error) {
-	s := &Sim{PublicKey: PublicKey()}
+// Options — поведение стенда.
+type Options struct {
+	BlockUDP bool // сервер отправляет UDP из тоннеля в blackhole (правило маршрутизации network: udp)
+}
+
+// Start поднимает маску, цель, DNS-резолвер и сервер.
+func Start() (*Sim, error) { return StartWith(Options{}) }
+
+// StartWith — Start с поведением стенда.
+func StartWith(o Options) (*Sim, error) {
+	s := &Sim{PublicKey: PublicKey(), opts: o}
 	var err error
 	if s.Mask, err = s.mask(); err != nil {
 		s.Close()
 		return nil, err
 	}
 	if s.Target, err = s.target(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	if s.DNS, err = s.dns(); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -146,6 +165,28 @@ func (s *Sim) target() (string, error) {
 	return ln.Addr().String(), nil
 }
 
+// dns — резолвер на 127.0.0.1/udp: на любой A-запрос отвечает 192.0.2.1.
+func (s *Sim) dns() (string, error) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	srv := &dns.Server{PacketConn: pc, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(q)
+		for _, qq := range q.Question {
+			if qq.Qtype == dns.TypeA {
+				m.Answer = append(m.Answer, &dns.A{Hdr: dns.RR_Header{Name: qq.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+					A: net.IPv4(192, 0, 2, 1)})
+			}
+		}
+		_ = w.WriteMsg(m)
+	})}
+	go srv.ActivateAndServe()
+	s.closers = append(s.closers, func() { _ = srv.Shutdown() })
+	return pc.LocalAddr().String(), nil
+}
+
 func (s *Sim) server() (int, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -163,7 +204,11 @@ func (s *Sim) server() (int, error) {
 				"xhttpSettings":   map[string]any{"path": Path}},
 		}},
 		// Цель — на петле, а freedom по умолчанию петлю и частные сети блокирует.
-		"outbounds": []any{map[string]any{"protocol": "freedom", "settings": map[string]any{"finalRules": []any{map[string]any{"action": "allow"}}}}},
+		"outbounds": []any{map[string]any{"protocol": "freedom", "settings": map[string]any{"finalRules": []any{map[string]any{"action": "allow"}}}},
+			map[string]any{"protocol": "blackhole", "tag": "block"}},
+	}
+	if s.opts.BlockUDP {
+		cfg["routing"] = map[string]any{"rules": []any{map[string]any{"type": "field", "network": "udp", "outboundTag": "block"}}}
 	}
 	b, _ := json.Marshal(cfg)
 	jc, err := serial.DecodeJSONConfig(strings.NewReader(string(b)))

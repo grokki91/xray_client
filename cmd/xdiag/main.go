@@ -5,6 +5,7 @@
 //	          [--bridge | --ssh АЛИАС] [--live СЕК] [--import ФАЙЛ]… [--logs ФАЙЛ]
 //	          [--capture [--capture-secs СЕК]] [--json] [--yes] [--no-save]
 //	xdiag history [list | show ID [--details] | export ID [--include-address] [--text] | delete ID | clear]
+//	xdiag history replay [ID | --all] [--unchanged] [--json]
 //	xdiag data [path | show [--session ID]]
 //	xdiag settings [show | set КЛЮЧ ЗНАЧЕНИЕ | unset КЛЮЧ]
 //	xdiag bridge-help | hello HEX | version
@@ -90,6 +91,8 @@ func usage() {
       --json                     вывод — экспорт сеанса JSON (без секретов)
       --yes                      согласиться на всё без вопросов
   xdiag history                  история; show ID [--details]; export ID [--include-address] [--text]; delete ID; clear
+  xdiag history replay [ID|--all] сохранённые сеансы через правила этой сборки: где вердикт изменился
+      --unchanged                показать и сеансы без изменений; --json — вывод JSON
   xdiag data path                где лежат данные
   xdiag data show [--session ID] показать сохранённое (расшифровка DPAPI)
   xdiag settings show | set КЛЮЧ ЗНАЧЕНИЕ | unset КЛЮЧ
@@ -320,6 +323,8 @@ func cmdHistory(args []string) error {
 			return err
 		}
 		os.Stdout.Write(append(b, '\n'))
+	case "replay":
+		return cmdReplay(e, args[1:])
 	case "delete":
 		id, err := need()
 		if err != nil {
@@ -335,6 +340,72 @@ func cmdHistory(args []string) error {
 		return fmt.Errorf("history: неизвестная подкоманда %q", sub)
 	}
 	return nil
+}
+
+// cmdReplay — улики сеансов истории через rules.Decide этой сборки: было / стало (код, уровень).
+// В сеть не ходит, историю не перезаписывает; выводит только метки.
+func cmdReplay(e *engine.Engine, args []string) error {
+	var id string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			id = a
+		} else if a != "--all" && a != "--unchanged" && a != "--json" {
+			return fmt.Errorf("history replay: неизвестный флаг %q", a)
+		}
+	}
+	var l []engine.Replayed
+	if id != "" {
+		s, err := e.Load(id)
+		if err != nil {
+			return err
+		}
+		l = []engine.Replayed{e.Replay(s)}
+	} else {
+		l = e.ReplayHistory()
+	}
+	if hasFlag(args, "--json") {
+		b, _ := json.MarshalIndent(l, "", "  ")
+		os.Stdout.Write(append(b, '\n'))
+		return nil
+	}
+	if len(l) == 0 {
+		fmt.Println("История пуста")
+		return nil
+	}
+	fmt.Print(replayText(l, id != "" || hasFlag(args, "--unchanged")))
+	return nil
+}
+
+// replayText — строки «было → стало»; без всех — только изменившиеся и нечитаемые.
+func replayText(l []engine.Replayed, all bool) string {
+	mark := func(m engine.Mark) string {
+		c := m.Code
+		if c == "" {
+			c = "—"
+		}
+		return fmt.Sprintf("%s (%s)", c, m.Level.Text())
+	}
+	var b strings.Builder
+	changed, bad := 0, 0
+	for _, r := range l {
+		at := r.At.Local().Format("02.01 15:04")
+		switch {
+		case r.Err != "":
+			bad++
+			fmt.Fprintf(&b, "%s  %s  %s\n", r.ID, at, r.Err)
+		case r.Changed:
+			changed++
+			fmt.Fprintf(&b, "%s  %s  было: %s → стало: %s\n", r.ID, at, mark(r.Was), mark(r.Now))
+		case all:
+			fmt.Fprintf(&b, "%s  %s  без изменений: %s\n", r.ID, at, mark(r.Now))
+		}
+	}
+	fmt.Fprintf(&b, "Проверено сеансов: %d, вердикт изменился: %d", len(l), changed)
+	if bad > 0 {
+		fmt.Fprintf(&b, ", не прочитано: %d", bad)
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 func hasFlag(args []string, f string) bool {

@@ -9,6 +9,8 @@
 - Тело PR — без «Generated with Claude Code» и без ссылки на сессию: правило владельца
   (`pr-description`) важнее умолчаний среды. В коммитах подпись (`Co-Authored-By`,
   `Claude-Session`) остаётся.
+- Хук `.claude/hooks/commit-guard.sh` не пускает `git commit`/`git push`, пока не зелёный
+  `go test ./internal/repocheck/` (дерево и текст команды); без `jq`/`go` молча пропускает.
 - Большие файлы — по разделам (`grep -n`, `offset`/`limit`): `docs/architecture.md` ≈ 830 строк,
   `internal/engine/phase_net.go` ≈ 750.
 

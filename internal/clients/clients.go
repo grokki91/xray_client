@@ -83,6 +83,7 @@ type LogSummary struct {
 	Pasted bool           `json:"pasted"`
 
 	direct []string // строки прямого выхода: в Lines — после остальных (mergeLines)
+	marks  []mark   // строки со временем — хронология (timeline.go)
 }
 
 // Сколько характерных строк хранить: строки о соединениях через сервер важнее — прямые проверки
@@ -136,6 +137,9 @@ var logPatterns = []struct {
 	{"empty_fp", regexp.MustCompile(`(?i)empty fingerprint`)},
 	{"dns_error", regexp.MustCompile(`(?i)(dns|lookup)[^\n]{0,60}(no such host|server misbehaving|refused|failed)`)},
 }
+
+// AppError — ключи ошибок самого приложения клиента (ядро, порт, TUN, профиль), а не соединений.
+var AppError = map[string]bool{"core_failed": true, "port_busy": true, "tun_error": true, "empty_fp": true}
 
 // reDirect — строка о прямом выходе клиента, мимо сервера: «using outbound/direct[…]», монитор
 // Hiddify «outbound direct-fragment … URL test failed», DNS прямых соединений. Её таймауты и
@@ -205,17 +209,23 @@ func scanText(r io.Reader, s *LogSummary) {
 				s.Counts["direct_failed"]++
 				s.direct = keep(s.direct, line, maxDirectLines)
 			}
-			continue
+			continue // прямой выход — не про тоннель: в хронологию не идёт
 		}
-		hit := false
+		hit, fail, app := false, false, false
 		for _, p := range logPatterns {
 			if p.re.MatchString(line) {
 				s.Counts[p.key]++
 				hit = true
+				fail = fail || connFail[p.key]
+				app = app || AppError[p.key]
 			}
 		}
 		if hit {
 			s.Lines = keep(s.Lines, line, maxLines)
+		}
+		// Ошибка самого приложения (ядро, TUN, порт) — не сбой через сервер и не «работал».
+		if t, ok := stamp(line); ok && (fail || !app) {
+			s.marks = append(s.marks, mark{t: t, fail: fail})
 		}
 	}
 }

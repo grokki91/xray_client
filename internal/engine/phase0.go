@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -141,21 +142,24 @@ func (r *run) clientEvidence() {
 		Summary: yesno(len(exposed) > 0, "Локальный прокси слушает все интерфейсы: порты "+strings.Join(exposed, ", "), "Локальный прокси клиентов открыт только на петле")})
 	logs := r.active.logs
 	if r.o.PastedLogs != "" {
-		p := clients.ScanText(r.o.PastedLogs)
-		for k, v := range p.Counts {
-			if logs.Counts == nil {
-				logs.Counts = map[string]int{}
-			}
-			logs.Counts[k] += v
-		}
-		logs.Lines = append(logs.Lines, p.Lines...)
-		logs.Found, logs.Pasted = true, true
+		logs.Merge(clients.ScanText(r.o.PastedLogs))
 	}
 	lf := map[string]any{"found": logs.Found, "files": logs.Files, "age_min": logs.AgeMin, "pasted": logs.Pasted}
 	for k, n := range logs.Counts {
 		lf[k] = n
 	}
-	r.put(evidence.Evidence{ID: "C6", Source: evidence.FromLog, Reliability: evidence.Medium, Facts: lf, Summary: logSummary(logs)})
+	sum := logSummary(logs)
+	// Хронология за сутки: эпизоды сбоев через сервер (решение 16) — по уже прочитанным логам.
+	r.tl = logs.Timeline(r.now(), r.now().Add(-24*time.Hour))
+	if r.tl.Stamped > 0 {
+		lf["episodes"], lf["recovered"] = len(r.tl.Episodes), r.tl.Recovered
+		lf["span_h"] = math.Round(r.tl.Span.Hours()*10) / 10
+		sum += episodesText(r.tl, r.now())
+	}
+	if n := len(r.tl.Episodes); n > 0 {
+		lf["last_episode_min"] = int(r.now().Sub(r.tl.Episodes[n-1].To).Minutes())
+	}
+	r.put(evidence.Evidence{ID: "C6", Source: evidence.FromLog, Reliability: evidence.Medium, Facts: lf, Summary: sum})
 	for _, l := range logs.Lines {
 		r.sess.Logs = append(r.sess.Logs, r.red.String(l))
 	}
@@ -167,9 +171,6 @@ var logTitles = map[string]string{
 	"timeout": "таймаут", "tun_error": "ошибка TUN", "port_busy": "порт занят", "core_failed": "ядро не запустилось",
 	"empty_fp": "пустой fingerprint", "dns_error": "ошибка DNS", "direct_failed": "сбой прямых проверок клиента (мимо сервера)",
 }
-
-// logApp — ошибки самого приложения клиента (ядро, порт, TUN, профиль), а не соединений.
-var logApp = map[string]bool{"core_failed": true, "port_busy": true, "tun_error": true, "empty_fp": true}
 
 // logSummary — C6 тремя группами: соединения через сервер, сам клиент, прямой выход мимо сервера
 // (DNS и URL-тесты клиента — их таймауты не про сервер). В группе — по убыванию числа.
@@ -196,7 +197,7 @@ func logSummary(l clients.LogSummary) string {
 			t = k
 		}
 		p := fmt.Sprintf("%s ×%d", t, l.Counts[k])
-		if logApp[k] {
+		if clients.AppError[k] {
 			app = append(app, p)
 		} else {
 			conn = append(conn, p)
@@ -338,7 +339,7 @@ func (r *run) profileEvidence() {
 		}
 		f := map[string]any{"found": true, "source": s.Source, "transport": s.Transport, "security": s.Security, "fp": s.Fingerprint,
 			"port_custom": s.PortCustom, "server_is_ip": s.ServerIsIP, "issues": s.Issues, "issues_text": strings.Join(texts, "; "), "has_sid": s.HasSID,
-			"has_path": s.HasPath, "mode": s.Mode, "flow": s.Flow, "pq": s.PQ}
+			"has_path": s.HasPath, "mode": s.Mode, "flow": s.Flow, "pq": s.PQ, "kind": r.prof.Kind()}
 		sum := fmt.Sprintf("Профиль (%s): %s+%s, fp=%s, порт %s", s.Origin, strings.ToUpper(s.Transport), s.Security, orEmpty(s.Fingerprint),
 			yesno(s.PortCustom, "нестандартный", "443"))
 		if len(texts) > 0 {
@@ -552,4 +553,30 @@ func proxyLocal(f osw.Facts) (local, listening bool) {
 		}
 	}
 	return
+}
+
+// episodesText — хронология C6 одной фразой: сколько эпизодов сбоев через сервер за сутки, когда
+// последний и сколько из них клиент пережил сам. Время — только относительное.
+func episodesText(tl clients.Timeline, now time.Time) string {
+	n := len(tl.Episodes)
+	if n == 0 {
+		return fmt.Sprintf("; хронология %.1f ч: серий сбоев через сервер нет", tl.Span.Hours())
+	}
+	last := tl.Episodes[n-1]
+	s := fmt.Sprintf("; хронология %.1f ч: серий сбоев через сервер %d (последняя — %s назад, %d строк за %s)",
+		tl.Span.Hours(), n, ago(now.Sub(last.To)), last.N, ago(last.To.Sub(last.From)))
+	if tl.Recovered > 0 {
+		s += fmt.Sprintf(", после %d клиент работал дальше", tl.Recovered)
+	}
+	return s
+}
+
+func ago(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "<1 мин"
+	case d < time.Hour:
+		return fmt.Sprintf("%d мин", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%.1f ч", d.Hours())
 }

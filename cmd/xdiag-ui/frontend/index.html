@@ -19,13 +19,14 @@
       <button class="tab" data-tab="history" role="tab" title="История"><i data-icon="clock"></i><span>История</span></button>
       <button class="tab" data-tab="settings" role="tab" title="Настройки"><i data-icon="gear"></i><span>Настройки</span></button>
       <button class="tab" data-tab="data" role="tab" title="Данные"><i data-icon="folder"></i><span>Данные</span></button>
+      <button class="tab" data-tab="about" role="tab" title="О программе"><i data-icon="info"></i><span>О программе</span></button>
     </nav>
     <div class="sidefoot">
       <label class="theme" title="Тёмная тема">
         <i data-icon="moon"></i><span>Тёмная тема</span>
         <input type="checkbox" id="themeDark" role="switch"><span class="switch" aria-hidden="true"></span>
       </label>
-      <div id="ver" class="ver"></div>
+      <button id="ver" class="ver" title="О программе"></button>
     </div>
   </aside>
 
@@ -282,6 +283,24 @@
           <p>На сервере (во время первой команды один раз нажмите «Подключить» в клиенте):</p>
           <pre id="manual" class="pre"></pre>
           <p>Затем скопируйте файлы на ПК и нажмите «Импорт doctor.json / health.json».</p>
+        </div>
+      </section>
+
+      <section id="tab-about" class="panel">
+        <div class="card about">
+          <div class="abrand">
+            <div class="logo big" aria-hidden="true">X</div>
+            <div>
+              <h2>xdiag</h2>
+              <p class="muted">Диагностика подключений VLESS + REALITY + XHTTP на Windows</p>
+            </div>
+          </div>
+          <dl class="kv">
+            <dt>Версия</dt><dd><b id="aVer">—</b></dd>
+            <dt>Сборка</dt><dd><code id="aCommit">—</code></dd>
+            <dt>Исходный код</dt><dd><code>github.com/grokki91/xray_client</code></dd>
+          </dl>
+          <p class="hint">Номер растёт с каждой правкой приложения: исправление — третья цифра (1.0.1), новая возможность — вторая (1.1.0), несовместимое изменение — первая (2.0.0).</p>
         </div>
       </section>
     </main>

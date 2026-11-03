@@ -1,12 +1,20 @@
-# Сборка xdiag на Windows из исходников (docs/architecture.md, вопрос 5: сборка владельцем).
+﻿# Сборка xdiag на Windows из исходников (docs/architecture.md, вопрос 5: сборка владельцем).
 # Нужен Go 1.26+:  winget install GoLang.Go   (и git)
 # Результат: dist\xdiag-ui.exe (окно) и dist\xdiag.exe (терминал).
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
-$ver = (git describe --tags --always --dirty 2>$null)
-if (-not $ver) { $ver = 'dev' }
-$ld = "-s -w -X github.com/grokki91/xray_client/internal/engine.Version=$ver"
+# Версия — из changes/*.md и истории git (internal/version); без git или с обрезанной
+# историей — 'dev'.
+$ErrorActionPreference = 'Continue'
+$ver = (go run ./cmd/version 2>$null)
+$verld = (go run ./cmd/version -ldflags 2>$null)
+$ErrorActionPreference = 'Stop'
+if ($LASTEXITCODE -ne 0 -or -not $ver) { $ver = 'dev'; $verld = '' }
+Write-Host "Версия: $ver"
+$ld = "-s -w $verld"
+$winver = @()
+if ($ver -ne 'dev') { $winver = @('--product-version', $ver, '--file-version', $ver) }
 
 # Иконка, манифест и версия файла — необязательно: без них exe работает так же.
 try {
@@ -14,7 +22,7 @@ try {
   $winres = Join-Path (go env GOPATH) 'bin\go-winres.exe'
   foreach ($d in 'cmd\xdiag-ui', 'cmd\xdiag') {
     Push-Location $d
-    & $winres make --in winres\winres.json --out rsrc --arch amd64
+    & $winres make --in winres\winres.json --out rsrc --arch amd64 @winver
     Pop-Location
   }
 } catch {
