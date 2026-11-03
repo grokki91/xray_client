@@ -16,6 +16,7 @@ layers:
 codes:
   lan.noinet:            {layer: L2, order: 100, title: "Нет интернета"}
   profile.missing:       {layer: L5, order: 110, title: "Профиль не найден"}
+  profile.unsupported:   {layer: L5, order: 112, title: "Профиль не поддерживается (не VLESS + REALITY)"}
   server.listen:         {layer: L4, order: 150, title: "Сервер: Xray не слушает порт"}
   server.dns:            {layer: L4, order: 151, title: "Сервер: маска не резолвится"}
   server.egress:         {layer: L4, order: 152, title: "Сервер: нет выхода в интернет"}

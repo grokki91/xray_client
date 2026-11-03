@@ -338,7 +338,7 @@ func (r *run) profileEvidence() {
 		}
 		f := map[string]any{"found": true, "source": s.Source, "transport": s.Transport, "security": s.Security, "fp": s.Fingerprint,
 			"port_custom": s.PortCustom, "server_is_ip": s.ServerIsIP, "issues": s.Issues, "issues_text": strings.Join(texts, "; "), "has_sid": s.HasSID,
-			"has_path": s.HasPath, "mode": s.Mode, "flow": s.Flow, "pq": s.PQ}
+			"has_path": s.HasPath, "mode": s.Mode, "flow": s.Flow, "pq": s.PQ, "kind": r.prof.Kind()}
 		sum := fmt.Sprintf("Профиль (%s): %s+%s, fp=%s, порт %s", s.Origin, strings.ToUpper(s.Transport), s.Security, orEmpty(s.Fingerprint),
 			yesno(s.PortCustom, "нестандартный", "443"))
 		if len(texts) > 0 {

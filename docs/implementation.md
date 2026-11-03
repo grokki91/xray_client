@@ -180,6 +180,13 @@
     - Не проверено на живой Windows: разбор `~/.ssh/config` и `ssh -G` — по документации
       OpenSSH; строки логов Hiddify для соединений через сервер — по формату sing-box.
 
+14. **Профиль не VLESS + REALITY (issue #15).** Профиль из настроек с `security=tls`/`none`
+    (или не VLESS) брался в проверку, и `security.not_reality` / `protocol.not_vless` давали
+    «Профиль испорчен при импорте», хотя профиль цел.
+    - **`profile.unsupported`** (L5, сразу после `profile.missing`): «Профиль не
+      поддерживается: VLESS + TLS — xdiag проверяет только VLESS + REALITY» (`C3.kind`), статус
+      «Не проверено». `profile.import` — только адрес (`addr.empty|addr.format`).
+
 ## Контракт хэшей профиля (для `xm bridge facts`)
 
 Соль — 16 случайных байт сессии, на сервер уходит hex (32 символа) через stdin. Хэш —
