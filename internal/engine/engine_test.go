@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -644,5 +646,56 @@ func TestHiddifyShows(t *testing.T) {
 		if got := hiddifyShows(c.r); got != c.want {
 			t.Errorf("%+v: %q, ожидалось %q", c.r, got, c.want)
 		}
+	}
+}
+
+// «После диагностики VPN уходит в таймаут»: по отчётам смена отпечатка к серверу во время
+// заморозки продлевает её до 10 минут. Все TLS к серверу — отпечатком клиента; эталон другим
+// отпечатком (у клиента пресет без X25519MLKEM768) — только если TLS отпечатком клиента получил
+// ответ. Пресет клиента с X25519MLKEM768 (firefox) — эталон им же, без лишнего TLS перед ним.
+func TestProbesKeepClientFingerprint(t *testing.T) {
+	silent := listen(t, "", 300*time.Millisecond) // TCP есть, после ClientHello — тишина и закрытие
+	tlsSrv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	tlsSrv.Config.ErrorLog = log.New(io.Discard, "", 0) // P1 закрывает TCP без TLS
+	tlsSrv.StartTLS()
+	defer tlsSrv.Close()
+	answers := tlsSrv.Listener.Addr().(*net.TCPAddr)
+	for _, c := range []struct {
+		name, fp string
+		srv      *net.TCPAddr
+		refFP    string // "" — эталон не запускается
+		p2First  bool
+	}{
+		{"edge, заморозка", "edge", silent, "", true},
+		{"edge, сервер отвечает", "edge", answers, "chrome", true},
+		{"firefox", "firefox", answers, "firefox", false},
+		{"chrome", "chrome", silent, "chrome", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := probeRun(t, Options{Reference: true, SkipRepeat: true}, &profile.Profile{Protocol: "vless", Security: "reality",
+				Address: "127.0.0.1", Port: c.srv.Port, SNI: "www.example.com", Fingerprint: c.fp})
+			var refFP string
+			var p2Before bool
+			r.e.RunRef = func(_ context.Context, o refcore.Options) refcore.Result {
+				refFP, p2Before = o.Fingerprint, r.set.Has("P2")
+				return refcore.Result{Outcome: "handshake_timeout"}
+			}
+			r.phase2(context.Background())
+			if refFP != c.refFP || (c.refFP != "" && p2Before != c.p2First) {
+				t.Fatalf("эталон: fp %q (ждали %q), P2 до эталона — %v", refFP, c.refFP, p2Before)
+			}
+			if p2 := r.set.Get("P2"); p2 == nil || p2.Str("fp") != c.fp {
+				t.Fatalf("P2: %+v", p2)
+			}
+			if c.refFP == "" {
+				var skip bool
+				for _, s := range r.sess.Steps {
+					skip = skip || (s.ID == "P3" && s.Status == "skip" && strings.Contains(s.Note, "до 10 минут"))
+				}
+				if !skip {
+					t.Fatalf("шаг P3: %+v", r.sess.Steps)
+				}
+			}
+		})
 	}
 }

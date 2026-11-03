@@ -52,6 +52,9 @@ func status(s *engine.SessionData, m rules.Result, chain []Stage) Status {
 		return Status{"ok", "Тоннель работает: «таймаут» — только индикатор клиента"}
 	case m.Code == "lan.noinet" && m.Level.Rank() >= rules.Likely.Rank():
 		return Status{"problem", "Не работает: нет интернета"}
+	case m.Code == "os.vpn.other" && m.Level.Rank() >= rules.Likely.Rank():
+		// Не «причина в настройках Windows»: интернет держит чужое приложение, его и выключать.
+		return Status{"problem", "Не работает: весь трафик — через другой VPN"}
 	case m.Code == "profile.missing":
 		return Status{"incomplete", "Проверять нечего: профиль не найден"}
 	case m.Code == "profile.unsupported":
@@ -365,6 +368,8 @@ func problemText(s *engine.SessionData, m rules.Result) string {
 		return "Проверены сервер и профиль (эталонное ядро Xray)"
 	case "lan.noinet":
 		return "Нет интернета на этом ПК"
+	case "os.vpn.other":
+		return "Нет интернета мимо другого VPN на этом ПК"
 	case "profile.missing":
 		return "Не найден профиль подключения"
 	case "profile.unsupported":

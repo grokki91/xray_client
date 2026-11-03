@@ -5,8 +5,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/grokki91/xray_client/internal/hello"
 )
 
 func TestBudgetWindows(t *testing.T) {
@@ -106,12 +109,62 @@ func TestClassifyAndProbes(t *testing.T) {
 	if r := ProbeTCP(context.Background(), d, nil, addr); r.Outcome != "ok" {
 		t.Fatalf("TCP %+v", r)
 	}
-	if r := ProbeTLS(context.Background(), d, nil, addr, "www.example.com", time.Second); r.Outcome != "hello_timeout" {
+	if r := ProbeTLS(context.Background(), d, nil, addr, "www.example.com", "", time.Second); r.Outcome != "hello_timeout" {
 		t.Fatalf("молчащий сервер: %+v", r)
 	}
 	ln.Close()
 	if r := ProbeTCP(context.Background(), d, nil, addr); r.Outcome != "refused" {
 		t.Fatalf("закрытый порт: %+v", r)
+	}
+}
+
+// TLS-проба шлёт ClientHello отпечатком клиента: другой отпечаток к серверу во время заморозки
+// продлевает её до 10 минут (landscape.md сервера). chrome — с X25519MLKEM768, edge — без него;
+// пусто — chrome, как у Xray.
+func TestProbeTLSFingerprint(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	got := make(chan *hello.Hello, 1)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+			var buf []byte
+			tmp := make([]byte, 4096)
+			for {
+				n, err := c.Read(tmp)
+				buf = append(buf, tmp[:n]...)
+				if h, perr := hello.Parse(buf); perr == nil {
+					got <- h
+					break
+				}
+				if err != nil {
+					got <- nil
+					break
+				}
+			}
+			c.Close()
+		}
+	}()
+	d := &Dialer{Timeout: 2 * time.Second}
+	for _, c := range []struct {
+		fp    string
+		mlkem bool
+	}{{"chrome", true}, {"", true}, {"edge", false}, {"EDGE", false}} {
+		ProbeTLS(context.Background(), d, nil, ln.Addr().String(), "www.example.com", c.fp, time.Second)
+		h := <-got
+		if h == nil {
+			t.Fatalf("fp=%q: ClientHello не разобран", c.fp)
+		}
+		if m := slices.Contains(h.ShareNames(), "X25519MLKEM768"); m != c.mlkem {
+			t.Fatalf("fp=%q: X25519MLKEM768 в долях — %v, ждали %v (%v)", c.fp, m, c.mlkem, h.ShareNames())
+		}
 	}
 }
 

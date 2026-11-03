@@ -11,6 +11,7 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+	xtls "github.com/xtls/xray-core/transport/internet/tls"
 )
 
 // TCPResult — P1: TCP до порта.
@@ -58,7 +59,7 @@ func ProbeBanner(ctx context.Context, d *Dialer, b *Budget, addr, prefix string,
 	return TCPResult{Outcome: "ok", Ms: ms}, prefix != "" && string(buf[:n]) == prefix
 }
 
-// TLSResult — P2/N4: TLS-хендшейк с отпечатком chrome.
+// TLSResult — P2/N4: TLS-хендшейк отпечатком клиента.
 type TLSResult struct {
 	// cert — сертификат получен (CertValid — валиден для SNI); tcp_* — TCP не установился;
 	// hello_timeout — после ClientHello ни байта; reset_after_hello / eof_after_hello — обрыв без
@@ -71,9 +72,12 @@ type TLSResult struct {
 	Detail    string `json:"-"` // текст ошибки — только в память, наружу через redact
 }
 
-// ProbeTLS — TCP к addr, затем ClientHello uTLS HelloChrome_Auto с SNI. Сертификат проверяется
-// по системным корням (Windows CryptoAPI) — так видно, отдал ли адрес настоящую маску.
-func ProbeTLS(ctx context.Context, d *Dialer, b *Budget, addr, sni string, timeout time.Duration) TLSResult {
+// ProbeTLS — TCP к addr, затем ClientHello uTLS с SNI и отпечатком fp — пресетом профиля по
+// таблице Xray (пусто или неизвестный — chrome). Отпечаток — тот же, что у клиента: по отчётам
+// (landscape.md сервера, 2026-05…06) смена отпечатка к серверу во время заморозки продлевает её
+// до 10 минут. Сертификат проверяется по системным корням (Windows CryptoAPI) — так видно,
+// отдал ли адрес настоящую маску.
+func ProbeTLS(ctx context.Context, d *Dialer, b *Budget, addr, sni, fp string, timeout time.Duration) TLSResult {
 	if b != nil {
 		if err := b.Acquire(TLS); err != nil {
 			return TLSResult{Outcome: "budget"}
@@ -94,7 +98,7 @@ func ProbeTLS(ctx context.Context, d *Dialer, b *Budget, addr, sni string, timeo
 	if dl, ok := ctx.Deadline(); ok {
 		_ = cc.SetDeadline(dl)
 	}
-	u := utls.UClient(cc, &utls.Config{ServerName: sni, InsecureSkipVerify: true}, utls.HelloChrome_Auto)
+	u := utls.UClient(cc, &utls.Config{ServerName: sni, InsecureSkipVerify: true}, Hello(fp))
 	err = u.HandshakeContext(ctx)
 	r := TLSResult{Ms: int(time.Since(t0).Milliseconds()), BytesIn: cc.In.Load()}
 	if err != nil {
@@ -128,6 +132,15 @@ func ProbeTLS(ctx context.Context, d *Dialer, b *Budget, addr, sni string, timeo
 		r.CertValid = verr == nil
 	}
 	return r
+}
+
+// Hello — ClientHello uTLS для пресета fp по таблице Xray-core (та же, что у ядра клиента и
+// эталона): пусто, «unsafe» или неизвестный — chrome.
+func Hello(fp string) utls.ClientHelloID {
+	if id := xtls.GetFingerprint(strings.ToLower(strings.TrimSpace(fp))); id != nil {
+		return *id
+	}
+	return utls.HelloChrome_Auto
 }
 
 // HTTPResult — эталонный хост (N1, B3).

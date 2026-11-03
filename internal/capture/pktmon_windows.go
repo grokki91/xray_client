@@ -5,11 +5,8 @@ package capture
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 	"unsafe"
@@ -25,35 +22,6 @@ func pktmon(args ...string) error {
 		return fmt.Errorf("pktmon %s: %v: %s", args[0], err, string(out))
 	}
 	return nil
-}
-
-func pktmonCapture(j Job, dir string, d time.Duration) Result {
-	etl := filepath.Join(dir, "xdiag-capture.etl")
-	pcap := filepath.Join(dir, "xdiag-capture.pcapng")
-	defer os.Remove(etl)
-	defer os.Remove(pcap)
-	// Фильтры pktmon — общее состояние системы: свой ставится и снимается, чужие на время
-	// захвата снимаются (иначе захват уйдёт по ним), о чём сказано в окне согласия.
-	_ = pktmon("filter", "remove")
-	defer pktmon("filter", "remove")
-	if err := pktmon("filter", "add", "xdiag", "-i", j.IP, "-t", "TCP", "-p", strconv.Itoa(j.Port)); err != nil {
-		return Result{Err: err.Error()}
-	}
-	if err := pktmon("start", "--capture", "--comp", "nics", "--pkt-size", "0", "--file-name", etl); err != nil {
-		return Result{Err: err.Error()}
-	}
-	time.Sleep(d)
-	if err := pktmon("stop"); err != nil {
-		return Result{Err: err.Error()}
-	}
-	if err := pktmon("etl2pcap", etl, "--out", pcap); err != nil {
-		return Result{Err: err.Error()}
-	}
-	data, err := os.ReadFile(pcap)
-	if err != nil {
-		return Result{Err: err.Error()}
-	}
-	return Analyze(data, net.ParseIP(j.IP), j.Port, j.Salt, j.SNIHash)
 }
 
 type shellExecuteInfo struct {
@@ -99,7 +67,14 @@ func RunElevated(ctx context.Context, exe, jobPath string) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		_ = windows.TerminateProcess(info.hProcess, 1)
+		// Не убивать сразу: помощник сам остановит pktmon и снимет фильтр (StopPath); убитый,
+		// он оставил бы захват идти до перезагрузки. TerminateProcess — только если не ответил.
+		_ = os.WriteFile(StopPath(jobPath), nil, 0o600)
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			_ = windows.TerminateProcess(info.hProcess, 1)
+		}
 		return ctx.Err()
 	}
 }

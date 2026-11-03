@@ -133,6 +133,25 @@ func TestPortSilentSSHOpen(t *testing.T) {
 	}
 }
 
+// Скрин 8: маршрут по умолчанию у другого VPN, пробы мимо него не открыли ни одного сайта. Итог —
+// не «нет интернета» и не «причина в настройках Windows», а другой VPN; звено «Интернет» красное.
+func TestOtherVPNHoldsRoute(t *testing.T) {
+	e, _ := rules.Load()
+	set := evidence.FromList([]evidence.Evidence{
+		{ID: "N1", Facts: map[string]any{"ok": false, "hosts_ok": 0.0, "hosts": 4.0, "bound": true}, Summary: "Эталонные сайты: 0 из 4"},
+		{ID: "N4", Facts: map[string]any{"ok": false, "stage": "dns"}},
+		{ID: "C3", Facts: map[string]any{"found": true}},
+		{ID: "W1", Facts: map[string]any{"tun_adapters": []string{}, "other_vpn": []string{"WireGuard Tunnel"}, "default_via_tun": true}},
+		{ID: "W2", Facts: map[string]any{"iface_kind": "vpn", "via_tun": true, "loop": true}},
+		{ID: "P1", Facts: map[string]any{"outcome": "error"}},
+	})
+	s := &engine.SessionData{ID: "20261103-193600-abcd", Started: time.Now(), Evidence: set.All(), Verdict: e.Decide(set)}
+	v := Build(s)
+	if v.Code != "os.vpn.other" || v.Status.Head != "Не работает: весь трафик — через другой VPN" || v.Stages[0].State != "fail" {
+		t.Fatalf("итог %s: %+v, звено %+v", v.Code, v.Status, v.Stages[0])
+	}
+}
+
 // Скрин 6: Hiddify «Подключение…», порт и SSH молчат и из другой сети. Окно говорит словами
 // самого Hiddify, звено «Сервер» — что и другая сеть не помогла, причина — на сервере.
 func TestSilentFromTwoNetworks(t *testing.T) {
