@@ -622,6 +622,8 @@ $("hClear").addEventListener("click", async () => {
 let hasURI = false;
 let profMode = "";      // "" | "edit" — вставляется новый | "del" — удалится при сохранении
 let bridgeCheck = null; // {alias, item} — последняя проверка моста (до закрытия окна)
+let hasPass = false;    // пароль ключа сохранён (значение в окно не выдаётся)
+let passForget = false; // «Забыть» — удалится при сохранении
 let bridgeBlock = null; // {bridge, alias, field} — «Диагностировать» остановлен: мост сервера профиля не готов
 let cleanForm = null;   // форма как сохранена
 const dirs = { hiddify: "", v2rayn: "" };
@@ -632,6 +634,7 @@ function formValues() {
     live_seconds: parseInt($("sLive").value, 10) || 60, reference: $("sRef").checked,
     alias: $("sAlias").value.trim(), hiddify_dir: dirs.hiddify, v2rayn_dir: dirs.v2rayn,
     new_uri: profMode === "del" ? "-" : profMode === "edit" ? $("sUri").value.trim() : "",
+    new_pass: $("sPass").value, forget_pass: passForget,
   };
 }
 const dirty = () => cleanForm !== null && JSON.stringify(formValues()) !== cleanForm;
@@ -657,6 +660,10 @@ async function loadSettings(force) {
   profMode = "";
   $("sUri").value = "";
   $("sAlias").value = s.alias || "";
+  $("sPass").value = "";
+  hasPass = !!s.has_pass;
+  passForget = false;
+  passControls();
   dirs.hiddify = s.hiddify_dir || "";
   dirs.v2rayn = s.v2rayn_dir || "";
   $("sClient").value = s.client || "auto";
@@ -688,7 +695,7 @@ function refreshStatus(delay) {
   stTimer = setTimeout(async () => {
     const seq = ++stSeq;
     let st;
-    try { st = await api().SetupStatus(formValues()); } catch (e) { return; }
+    try { st = await api().SetupStatus({ ...formValues(), new_pass: "" }); } catch (e) { return; }
     if (seq === stSeq) renderStatus(st);
   }, delay || 0);
 }
@@ -760,6 +767,14 @@ $("pShow").addEventListener("click", async () => {
 
 $("sAlias").addEventListener("input", () => edited(300));
 
+// Пароль ключа: символы скрыты, сохранённый в поле не возвращается — только «сохранён».
+function passControls() {
+  $("sPass").placeholder = passForget ? "удалится при сохранении" : hasPass ? "сохранён — чтобы заменить, введите новый" : "не нужен: ключ без пароля или в ssh-agent";
+  $("pForget").hidden = !hasPass || passForget;
+}
+$("sPass").addEventListener("input", () => { passForget = false; bridgeCheck = null; passControls(); setMsg(""); markDirty(); });
+$("pForget").addEventListener("click", () => { passForget = true; $("sPass").value = ""; bridgeCheck = null; passControls(); markDirty(); refreshStatus(); });
+
 $("bCheck").addEventListener("click", async () => {
   const alias = $("sAlias").value.trim();
   if (!alias) return;
@@ -771,7 +786,7 @@ $("bCheck").addEventListener("click", async () => {
   setStat($("stBridge"), { state: "run", text: "Подключение по SSH…" });
   setNote($("stBridgeNote"), "ssh " + alias + " → `sudo -n xm bridge facts`, до 45 с");
   try {
-    bridgeCheck = { alias, item: await api().CheckBridge(alias) };
+    bridgeCheck = { alias, item: await api().CheckBridge(alias, $("sPass").value, passForget) };
   } catch (e) {
     bridgeCheck = { alias, item: { state: "bad", text: "Не проверено", note: String(e) } };
   } finally {

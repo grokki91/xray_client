@@ -160,7 +160,7 @@ func TestHiddifyAgainstMlkemServer(t *testing.T) {
 	"timeline":{},"profile":{},"live":{"seconds":60},
 	"groups":[{"label":"A","ssh":true,"own":true,"attempts":[{"t":1,"st":"hello","rd":{"own":true,"r":"mlkem","core":"sing-box: Hiddify 4.x","mlkem_rule":true},"after":"closed"}]}],
 	"verdict":{"code":"client.core","title":"Клиент: ядро не шлёт X25519MLKEM768","evidence":["Test-NetConnection 127.0.0.1"],"actions":[]}}`
-	e.NewSSH = func(string) (SSHBridge, error) { return &fakeBridge{prof: p, doctor: doctor}, nil }
+	e.NewSSH = func(string, string) (SSHBridge, error) { return &fakeBridge{prof: p, doctor: doctor}, nil }
 
 	var steps []Step
 	// Window движок зовёт в горутине (окно идёт параллельно xm doctor), а фальшивый мост отвечает

@@ -60,7 +60,7 @@ func (r *run) bridgeStart(ctx context.Context) error {
 	}
 	r.sess.Bridge = "ssh"
 	r.step(3, "S1", "Сервер: факты (xm bridge facts)", "run", "")
-	b, err := r.e.NewSSH(alias)
+	b, err := r.e.NewSSH(alias, r.o.SSHPass)
 	var f *bridge.Facts
 	if err == nil {
 		f, err = b.Facts(ctx, r.red.SaltHex())
@@ -86,7 +86,7 @@ func (r *run) bridgeStart(ctx context.Context) error {
 // под xm), неизвестная ошибка и имя HostName, которое не резолвится (DNS сети покажут пробы).
 func (r *run) bridgeBlocks(code, alias string) bool {
 	switch code {
-	case "alias", "no_ssh", "host_key", "auth", "passphrase", "sudo", "no_bridge", "newer", "older":
+	case "alias", "no_ssh", "host_key", "auth", "passphrase", "bad_passphrase", "askpass", "sudo", "no_bridge", "newer", "older":
 		return true
 	case "resolve":
 		cfg := r.sshConfig()
@@ -221,7 +221,7 @@ func (r *run) bridgeFail(err error) {
 		r.missing("bridge_tun")
 	case code == "unreachable":
 		f["ssh"] = "unreachable"
-	case code == "host_key" || code == "auth" || code == "passphrase" || code == "sudo" || code == "no_bridge" || code == "newer" || code == "older":
+	case code == "host_key" || code == "auth" || code == "passphrase" || code == "bad_passphrase" || code == "askpass" || code == "sudo" || code == "no_bridge" || code == "newer" || code == "older":
 		f["ssh"] = "ok" // отказ ключа, sudo или xm — уже после соединения: адрес по SSH доступен
 	}
 	r.put(evidence.Evidence{ID: "S0", Source: evidence.FromNetwork, Reliability: evidence.High, Facts: f, Summary: sum})
@@ -231,7 +231,7 @@ func (r *run) bridgeFail(err error) {
 
 func bridgeCode(err error) string {
 	for code, e := range map[string]error{"alias": bridge.ErrAlias, "no_ssh": bridge.ErrNoSSH, "host_key": bridge.ErrHostKey,
-		"auth": bridge.ErrAuth, "passphrase": bridge.ErrPassphrase, "resolve": bridge.ErrResolve, "unreachable": bridge.ErrUnreachable, "sudo": bridge.ErrSudo,
+		"auth": bridge.ErrAuth, "passphrase": bridge.ErrPassphrase, "bad_passphrase": bridge.ErrBadPassphrase, "askpass": bridge.ErrAskpass, "resolve": bridge.ErrResolve, "unreachable": bridge.ErrUnreachable, "sudo": bridge.ErrSudo,
 		"no_bridge": bridge.ErrNoBridge, "newer": bridge.ErrNewerContract, "older": bridge.ErrOlderContract} {
 		if errors.Is(err, e) {
 			return code

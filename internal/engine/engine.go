@@ -50,6 +50,7 @@ type Options struct {
 
 	Bridge      string       // "" | "ssh": мост к серверу профиля, если его SSH задан (алиас или Host в ~/.ssh/config)
 	SSHAlias    string       // алиас из «Настроек»: мост, если ведёт на сервер профиля, и порт SSH для P6
+	SSHPass     string       // пароль ключа SSH (секрет; vault): ssh.exe получает его от помощника SSH_ASKPASS
 	LiveSeconds int          // окно xm doctor
 	Imports     []Import     // файлы xm (ручной мост)
 	PastedLogs  string       // экспорт логов клиента
@@ -101,7 +102,7 @@ type Engine struct {
 
 	CollectOS func(ctx context.Context, exe []string) osw.Facts
 	NewEnv    func(f *osw.Facts) *clients.Env
-	NewSSH    func(alias string) (SSHBridge, error)
+	NewSSH    func(alias, passphrase string) (SSHBridge, error)
 	RunRef    func(ctx context.Context, o refcore.Options) refcore.Result
 	Capture   func(ctx context.Context, job string, selfExe string) error
 	Resolver  *net.Resolver // nil — системный (тесты подставляют свой)
@@ -162,9 +163,9 @@ func New(st *store.Store) (*Engine, error) {
 	e := &Engine{Rules: re, Store: st, Adapters: clients.All(), CollectOS: osw.Collect, RunRef: refcore.Run,
 		LocalOpen: netprobe.LocalListening, ProbeClient: netprobe.ProbeViaClient, Conns: osw.TCPTable}
 	e.NewEnv = func(f *osw.Facts) *clients.Env { return clients.DefaultEnv(f, re.Compat) }
-	e.NewSSH = func(alias string) (SSHBridge, error) { return bridge.NewSSH(alias) }
+	e.NewSSH = func(alias, pass string) (SSHBridge, error) { return bridge.NewSSH(alias, pass) }
 	e.SSHPort = func(ctx context.Context, alias string) int {
-		s, err := bridge.NewSSH(alias)
+		s, err := bridge.NewSSH(alias, "")
 		if err != nil {
 			return 0
 		}
@@ -310,6 +311,7 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 	for _, hst := range r.hosts().PublicHosts() {
 		r.red.Keep(hst)
 	}
+	r.red.Add(redact.Other, o.SSHPass)
 	defer func() {
 		r.watch.stop()
 		if r.budget != nil {

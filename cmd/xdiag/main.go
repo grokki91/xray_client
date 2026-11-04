@@ -36,6 +36,10 @@ import (
 )
 
 func main() {
+	// Тот же exe — помощник SSH_ASKPASS моста (пароль ключа для ssh.exe).
+	if ok, code := bridge.AskpassMain(os.Args[1:], os.Stdout); ok {
+		os.Exit(code)
+	}
 	consoleUTF8()
 	if len(os.Args) < 2 {
 		usage()
@@ -97,7 +101,7 @@ func usage() {
   xdiag data path                где лежат данные
   xdiag data show [--session ID] показать сохранённое (расшифровка DPAPI)
   xdiag settings show | set КЛЮЧ ЗНАЧЕНИЕ | unset КЛЮЧ
-      ключи: ssh_alias, profile_uri (значение «-» — из stdin), hiddify_dir, v2rayn_dir,
+      ключи: ssh_alias, ssh_passphrase и profile_uri (значение «-» — из stdin), hiddify_dir, v2rayn_dir,
              client, retention_days, live_seconds, export_include_address, reference
   xdiag bridge-help              команды для сервера (ручной режим)
   xdiag version
@@ -149,7 +153,7 @@ func cmdRun(args []string) error {
 	}
 	o := engine.Options{Client: set.Client, ProfileURI: vault.ProfileURI, HiddifyDir: vault.HiddifyDir, V2rayNDir: vault.V2rayNDir,
 		Offline: *offline, Reference: set.Reference && !*noRef, LiveSeconds: set.LiveSeconds, Capture: *capt, CaptureSecs: *captSecs,
-		SSHAlias: vault.SSHAlias} // алиас без моста — только порт SSH для P6
+		SSHAlias: vault.SSHAlias, SSHPass: vault.SSHPassphrase} // алиас без моста — только порт SSH для P6
 	if *client != "" {
 		o.Client = *client
 	}
@@ -450,6 +454,9 @@ func cmdData(args []string) error {
 		fmt.Println("\nНастройки (settings.json):")
 		fmt.Print(pretty2(st.LoadSettings(), "  "))
 		fmt.Println("\nСекреты (vault.dpapi, расшифровано для вас):")
+		if v.SSHPassphrase != "" {
+			v.SSHPassphrase = "задан (не показывается)"
+		}
 		fmt.Print(pretty2(v, "  "))
 		fmt.Printf("\nСеансов в истории: %d (xdiag data show --session ID)\n", len(st.Sessions()))
 	default:
@@ -480,7 +487,8 @@ func cmdSettings(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("ssh_alias: %s\nprofile_uri: %s\nhiddify_dir: %s\nv2rayn_dir: %s\n", mark(v.SSHAlias), mark(v.ProfileURI), mark(v.HiddifyDir), mark(v.V2rayNDir))
+		fmt.Printf("ssh_alias: %s\nssh_passphrase: %s\nprofile_uri: %s\nhiddify_dir: %s\nv2rayn_dir: %s\n", mark(v.SSHAlias), mark(v.SSHPassphrase),
+			mark(v.ProfileURI), mark(v.HiddifyDir), mark(v.V2rayNDir))
 		fmt.Println("(значения секретов: xdiag data show)")
 		return nil
 	}
@@ -490,6 +498,9 @@ func cmdSettings(args []string) error {
 	key, val := args[1], ""
 	if args[0] == "set" {
 		val = args[2]
+		if key == "ssh_passphrase" && val != "-" {
+			return errors.New("ssh_passphrase — только из stdin (значение «-»): командную строку видят все процессы")
+		}
 		if val == "-" {
 			b, _ := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
 			val = strings.TrimSpace(string(b))
@@ -522,6 +533,8 @@ func applySetting(st *store.Store, key, val string) error {
 			}
 		}
 		v.SSHAlias = val
+	case "ssh_passphrase":
+		v.SSHPassphrase = val
 	case "profile_uri":
 		v.ProfileURI = val
 	case "hiddify_dir":

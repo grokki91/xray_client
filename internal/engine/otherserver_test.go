@@ -87,7 +87,7 @@ func TestBridgeAliasOtherServer(t *testing.T) {
 	e.SSHConfig = func() *bridge.SSHConfig { return bridge.ReadSSHConfig(cfg) }
 	p, _ := profile.ParseURI(s.URI("chrome"))
 	var dialed []string
-	e.NewSSH = func(alias string) (SSHBridge, error) {
+	e.NewSSH = func(alias, _ string) (SSHBridge, error) {
 		dialed = append(dialed, alias)
 		return &fakeBridge{prof: p, doctor: string(doctorAt("127.0.0.1"))}, nil
 	}
@@ -139,7 +139,7 @@ func TestBridgeNotReady(t *testing.T) {
 	e.SSHConfig = func() *bridge.SSHConfig { return bridge.ReadSSHConfig(cfg) }
 	p, _ := profile.ParseURI(s.URI("chrome"))
 	fail := bridge.ErrPassphrase
-	e.NewSSH = func(string) (SSHBridge, error) { return &fakeBridge{prof: p, err: fail}, nil }
+	e.NewSSH = func(string, string) (SSHBridge, error) { return &fakeBridge{prof: p, err: fail}, nil }
 	var phases []int
 	hooks := Hooks{Progress: func(st Step) { phases = append(phases, st.Phase) }}
 	o := Options{Reference: true, Hosts: testHosts(s), Bridge: "ssh", SkipRepeat: true}

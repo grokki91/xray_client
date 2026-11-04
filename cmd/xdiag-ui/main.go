@@ -16,6 +16,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
+	"github.com/grokki91/xray_client/internal/bridge"
 	"github.com/grokki91/xray_client/internal/capture"
 )
 
@@ -23,6 +24,10 @@ import (
 var assets embed.FS
 
 func main() {
+	// Тот же exe — помощник SSH_ASKPASS моста: отдаёт ssh.exe пароль ключа и сразу выходит.
+	if ok, code := bridge.AskpassMain(os.Args[1:], os.Stdout); ok {
+		os.Exit(code)
+	}
 	// Тот же exe — вспомогательный процесс захвата с правами администратора (UAC).
 	if len(os.Args) >= 3 && os.Args[1] == "capture-helper" {
 		if err := capture.RunJob(os.Args[2]); err != nil {

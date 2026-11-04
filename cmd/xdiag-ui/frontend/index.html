@@ -178,7 +178,7 @@
             <div class="sitem" id="bridgeItem">
               <div class="sline"><b>SSH-мост</b><span id="stBridge" class="stat"></span></div>
               <p class="snote" id="stBridgeNote"></p>
-              <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Если SSH сервера проверяемого профиля задан (здесь или Host в ~/.ssh/config), без готового моста диагностика не начнётся. Вход — по SSH-ключу; ключ с паролем — через ssh-agent.</p>
+              <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Если SSH сервера проверяемого профиля задан (здесь или Host в ~/.ssh/config), без готового моста диагностика не начнётся. Вход — по SSH-ключу; пароль ключа xdiag отдаёт ssh.exe сам, как вы в терминале.</p>
               <label class="field">Алиас из ~/.ssh/config
                 <span class="row nowrap">
                   <input id="sAlias" placeholder="например xm-ui" spellcheck="false" autocomplete="off" list="aliasList">
@@ -186,9 +186,15 @@
                   <button id="bCheck" class="ghost sm"><span class="btnspin" aria-hidden="true"></span><i data-icon="link"></i><span id="bCheckText">Проверить</span></button>
                 </span>
               </label>
+              <label class="field">Пароль ключа — только если ключ с паролем
+                <span class="row nowrap">
+                  <input id="sPass" type="password" autocomplete="new-password" spellcheck="false" placeholder="не нужен: ключ без пароля или в ssh-agent">
+                  <button id="pForget" class="link sm" hidden>Забыть</button>
+                </span>
+              </label>
               <details class="more">
                 <summary>Что выполняется на сервере</summary>
-                <p>Только чтение: <code>sudo -n xm bridge facts</code>, <code>health</code>, <code>doctor</code>. Подключается системный ssh.exe с вашими ~/.ssh/config, ключом и known_hosts. Ключи и known_hosts xdiag не читает и паролей не вводит; из ~/.ssh/config — только строки Host, HostName, Port и Include: так он сам находит SSH сервера по адресу из профиля, даже без алиаса здесь. Перед подключением xdiag спрашивает согласие; «Нет» — диагностика без фактов с сервера. Ничего из этого не сохраняется.</p>
+                <p>Только чтение: <code>sudo -n xm bridge facts</code>, <code>health</code>, <code>doctor</code>. Подключается системный ssh.exe с вашими ~/.ssh/config, ключом и known_hosts. Ключи и known_hosts xdiag не читает. Пароль ключа хранится зашифрованным DPAPI и уходит только в ssh.exe этого ПК (через SSH_ASKPASS, не в командной строке); вход по паролю сервера при этом выключен — на сервер он не попадёт; из ~/.ssh/config — только строки Host, HostName, Port и Include: так он сам находит SSH сервера по адресу из профиля, даже без алиаса здесь. Перед подключением xdiag спрашивает согласие; «Нет» — диагностика без фактов с сервера. Ничего из этого не сохраняется.</p>
               </details>
             </div>
           </div>

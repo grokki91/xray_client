@@ -48,6 +48,8 @@ type Vault struct {
 	HiddifyDir string `json:"hiddify_dir,omitempty"`
 	V2rayNDir  string `json:"v2rayn_dir,omitempty"`
 	Notes      string `json:"notes,omitempty"`
+	// SSHPassphrase — пароль ключа SSH для моста: только здесь (DPAPI), в окно и «Данные» не выдаётся.
+	SSHPassphrase string `json:"ssh_passphrase,omitempty"`
 }
 
 // IndexEntry — строка истории без секретов (открытый индекс).

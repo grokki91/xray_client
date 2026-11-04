@@ -261,6 +261,12 @@
     accepts key», sudo, xm, чужой алиас) — сеанс не начинается, окно ведёт в «Настройки». SSH не
     дошёл — улика, под TUN — нет. Не проверено на Windows: `ssh -v` и ssh-agent — по документации.
 
+19. **Пароль ключа SSH — в «Настройках»** (просьба владельца вместо ssh-agent). Отступление от §8.3:
+    пароль хранится в vault (DPAPI) и отдаётся ssh.exe помощником `SSH_ASKPASS` (тот же exe, пароль —
+    в окружении, не в командной строке); вместо BatchMode — `PasswordAuthentication=no`,
+    `KbdInteractiveAuthentication=no`, одна попытка; помощник отвечает только на «passphrase for».
+    Проверено на OpenSSH 9.6 (тест со sshd); `SSH_ASKPASS` у OpenSSH для Windows — не проверен.
+
 ## Контракт хэшей профиля (для `xm bridge facts`)
 
 Соль — 16 случайных байт сессии, на сервер уходит hex (32 символа) через stdin. Хэш —
