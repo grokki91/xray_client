@@ -55,7 +55,6 @@
                 <option value="v2rayn">v2rayN</option>
               </select>
             </label>
-            <label class="chk" title="Факты с сервера по SSH: xm bridge facts|health|doctor"><input type="checkbox" id="optBridge"> Мост (SSH)</label>
             <label class="chk" title="Углублённо: захват пакетов pktmon, нужны права администратора"><input type="checkbox" id="optCapture"> Захват (UAC)</label>
           </div>
           <div class="extras">
@@ -176,10 +175,10 @@
                 <button id="pCancel" class="link sm" hidden>Отмена</button>
               </div>
             </div>
-            <div class="sitem">
+            <div class="sitem" id="bridgeItem">
               <div class="sline"><b>SSH-мост</b><span id="stBridge" class="stat"></span></div>
               <p class="snote" id="stBridgeNote"></p>
-              <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Нужен вход на сервер по SSH-ключу.</p>
+              <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Если SSH сервера проверяемого профиля задан (здесь или Host в ~/.ssh/config), без готового моста диагностика не начнётся. Вход — по SSH-ключу; ключ с паролем — через ssh-agent.</p>
               <label class="field">Алиас из ~/.ssh/config
                 <span class="row nowrap">
                   <input id="sAlias" placeholder="например xm-ui" spellcheck="false" autocomplete="off" list="aliasList">
@@ -187,14 +186,9 @@
                   <button id="bCheck" class="ghost sm"><span class="btnspin" aria-hidden="true"></span><i data-icon="link"></i><span id="bCheckText">Проверить</span></button>
                 </span>
               </label>
-              <label class="tgl">
-                <input type="checkbox" id="sBridge" role="switch"><span class="switch" aria-hidden="true"></span>
-                <span class="ttext"><b>Опрашивать сервер при каждой диагностике</b>
-                  <span id="sBridgeHint">Сразу отмечает «Мост (SSH)» на вкладке «Диагностика». Перед подключением xdiag всё равно спросит согласие.</span></span>
-              </label>
               <details class="more">
                 <summary>Что выполняется на сервере</summary>
-                <p>Только чтение: <code>sudo -n xm bridge facts</code>, <code>health</code>, <code>doctor</code>. Подключается системный ssh.exe с вашими ~/.ssh/config, ключом и known_hosts. Ключи и known_hosts xdiag не читает; из ~/.ssh/config — только строки Host, HostName, Port и Include: так он сам находит SSH сервера по адресу из профиля, даже без алиаса здесь. Ничего из этого не сохраняется.</p>
+                <p>Только чтение: <code>sudo -n xm bridge facts</code>, <code>health</code>, <code>doctor</code>. Подключается системный ssh.exe с вашими ~/.ssh/config, ключом и known_hosts. Ключи и known_hosts xdiag не читает и паролей не вводит; из ~/.ssh/config — только строки Host, HostName, Port и Include: так он сам находит SSH сервера по адресу из профиля, даже без алиаса здесь. Перед подключением xdiag спрашивает согласие; «Нет» — диагностика без фактов с сервера. Ничего из этого не сохраняется.</p>
               </details>
             </div>
           </div>

@@ -57,6 +57,8 @@ paths:
 
 ## Мост и сервер
 
+- Мост — до фазы 1 (`bridgeStart`): SSH сервера профиля задан, а мост не готов (ключ, sudo, xm,
+  чужой алиас) — `BridgeError`, ни одной пробы; SSH не дошёл — улика, сеанс идёт.
 - Вывод `xm doctor` / `xm health` — по `ui/doctor.py` / `ui/health.py` сервера; изменение
   контракта — `schema.major` и тест в `internal/bridge`. На сервер — только соль и длина окна,
   команды — только из allowlist.

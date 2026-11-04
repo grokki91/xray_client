@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"bufio"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -188,12 +189,7 @@ func (c *SSHConfig) Resolve(alias string) (host string, port int) {
 // Find — первый алиас, у которого итоговый HostName совпадает с одним из адресов сервера (IP или
 // имя из профиля): алиас и его порт SSH. ok=false — такого Host нет.
 func (c *SSHConfig) Find(addrs ...string) (alias string, port int, ok bool) {
-	want := map[string]bool{}
-	for _, a := range addrs {
-		if a = normHost(a); a != "" {
-			want[a] = true
-		}
-	}
+	want := hostSet(addrs)
 	if len(want) == 0 || c == nil {
 		return "", 0, false
 	}
@@ -204,6 +200,35 @@ func (c *SSHConfig) Find(addrs ...string) (alias string, port int, ok bool) {
 		}
 	}
 	return "", 0, false
+}
+
+// FindName — алиас моста для сервера: как Find, но только имя. Host, который сам — адрес
+// («Host 203.0.113.7»), не годится: алиас уходит в командную строку ssh.exe, а её видят все
+// процессы (AGENTS.md).
+func (c *SSHConfig) FindName(addrs ...string) (string, bool) {
+	want := hostSet(addrs)
+	if len(want) == 0 || c == nil {
+		return "", false
+	}
+	for _, al := range c.Aliases() {
+		if want[normHost(al)] || net.ParseIP(al) != nil {
+			continue
+		}
+		if h, _ := c.Resolve(al); want[normHost(h)] {
+			return al, true
+		}
+	}
+	return "", false
+}
+
+func hostSet(addrs []string) map[string]bool {
+	want := map[string]bool{}
+	for _, a := range addrs {
+		if a = normHost(a); a != "" {
+			want[a] = true
+		}
+	}
+	return want
 }
 
 func normHost(h string) string {

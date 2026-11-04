@@ -2,7 +2,7 @@
 // окна xdiag-ui.
 //
 //	xdiag run [--client auto|hiddify|v2rayn] [--uri-stdin] [--offline] [--no-reference]
-//	          [--bridge | --ssh АЛИАС] [--live СЕК] [--import ФАЙЛ]… [--logs ФАЙЛ]
+//	          [--ssh АЛИАС | --no-bridge] [--live СЕК] [--import ФАЙЛ]… [--logs ФАЙЛ]
 //	          [--capture [--capture-secs СЕК]] [--json] [--yes] [--no-save]
 //	xdiag history [list | show ID [--details] | export ID [--include-address] [--text] | delete ID | clear]
 //	xdiag history replay [ID | --all] [--unchanged] [--json]
@@ -83,7 +83,8 @@ func usage() {
       --uri-stdin                профиль vless:// из stdin (не из командной строки)
       --offline                  без сети: только клиенты и Windows
       --no-reference             без эталонной пробы Xray-core
-      --bridge | --ssh АЛИАС     мост к серверу: ssh АЛИАС sudo -n xm bridge …
+      --ssh АЛИАС                алиас моста (иначе — из настроек или Host сервера профиля в ~/.ssh/config)
+      --no-bridge                без моста к серверу (по умолчанию он идёт, если SSH сервера задан)
       --live СЕК                 окно xm doctor (10–120, по умолчанию 60)
       --import ФАЙЛ              doctor.json / health.json с сервера (ручной режим)
       --logs ФАЙЛ                экспорт логов клиента (Hiddify: «Логи» → «Скопировать»)
@@ -97,7 +98,7 @@ func usage() {
   xdiag data show [--session ID] показать сохранённое (расшифровка DPAPI)
   xdiag settings show | set КЛЮЧ ЗНАЧЕНИЕ | unset КЛЮЧ
       ключи: ssh_alias, profile_uri (значение «-» — из stdin), hiddify_dir, v2rayn_dir,
-             client, retention_days, live_seconds, export_include_address, use_bridge, reference
+             client, retention_days, live_seconds, export_include_address, reference
   xdiag bridge-help              команды для сервера (ручной режим)
   xdiag version
 `)
@@ -123,7 +124,7 @@ func cmdRun(args []string) error {
 	uriStdin := fs.Bool("uri-stdin", false, "")
 	offline := fs.Bool("offline", false, "")
 	noRef := fs.Bool("no-reference", false, "")
-	useBridge := fs.Bool("bridge", false, "")
+	noBridge := fs.Bool("no-bridge", false, "")
 	ssh := fs.String("ssh", "", "")
 	live := fs.Int("live", 0, "")
 	var imports multi
@@ -159,14 +160,12 @@ func cmdRun(args []string) error {
 	if *live > 0 {
 		o.LiveSeconds = *live
 	}
-	if *ssh != "" || *useBridge || set.UseBridge {
+	// Мост — к серверу проверяемого профиля, если его SSH задан: алиас (--ssh или настройки) или
+	// Host с адресом сервера в ~/.ssh/config. Задан, но не готов — сеанс не начинается.
+	if !*noBridge {
 		o.Bridge = "ssh"
 		if *ssh != "" {
 			o.SSHAlias = *ssh
-		}
-		if o.SSHAlias == "" {
-			fmt.Fprintln(os.Stderr, "Мост: SSH-алиас не задан (xdiag settings set ssh_alias xm-ui) — без моста")
-			o.Bridge = ""
 		}
 	}
 	for _, f := range imports {
@@ -560,12 +559,6 @@ func applySetting(st *store.Store, key, val string) error {
 			return err
 		}
 		s.ExportIncludeAddress = x
-	case "use_bridge":
-		x, err := b()
-		if err != nil {
-			return err
-		}
-		s.UseBridge = x
 	case "reference":
 		x, err := b()
 		if err != nil {
@@ -590,9 +583,9 @@ func cmdBridgeHelp() {
 
 Автоматический мост (когда на сервере появится xm bridge): один раз на сервере
   sudo xm bridge on
-и на ПК
+и на ПК — Host сервера в ~/.ssh/config (HostName — адрес из профиля) или
   xdiag settings set ssh_alias <алиас из ~/.ssh/config>
-  xdiag run --bridge`)
+  xdiag run`)
 }
 
 func cmdHello(args []string) error {

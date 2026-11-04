@@ -141,9 +141,6 @@ func (a *App) SaveSettings(f SettingsForm) error {
 		s.LiveSeconds = 60
 	}
 	s.Theme = a.st.LoadSettings().Theme // тема — переключателем (SetTheme), форма её не меняет
-	if v.SSHAlias == "" {
-		s.UseBridge = false // мост без алиаса не запустится
-	}
 	return a.st.SaveSettings(s)
 }
 
@@ -215,13 +212,20 @@ func (a *App) SetTheme(t string) error {
 // RunRequest — параметры запуска из окна.
 type RunRequest struct {
 	Client  string `json:"client"`
-	Bridge  bool   `json:"bridge"`
 	Capture bool   `json:"capture"`
 	Offline bool   `json:"offline"`
 }
 
+// RunResult — итог «Диагностировать»: вид сеанса или (Bridge) мост к серверу профиля задан, но не
+// готов — сеанс не начинался, окно ведёт в «Настройки» к мосту. Alias — какой алиас пробовали.
+type RunResult struct {
+	View   *report.View `json:"view,omitempty"`
+	Bridge *setup.Item  `json:"bridge,omitempty"`
+	Alias  string       `json:"alias,omitempty"`
+}
+
 // Run — сеанс диагностики. Ход — событиями progress/budget/consent/window.
-func (a *App) Run(req RunRequest) (*report.View, error) {
+func (a *App) Run(req RunRequest) (*RunResult, error) {
 	if a.err != nil {
 		return nil, a.err
 	}
@@ -232,15 +236,10 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 	}
 	o := engine.Options{Client: set.Client, ProfileURI: v.ProfileURI, HiddifyDir: v.HiddifyDir, V2rayNDir: v.V2rayNDir,
 		Reference: set.Reference, LiveSeconds: set.LiveSeconds, Capture: req.Capture, CaptureSecs: 60, Offline: req.Offline,
-		SSHAlias: v.SSHAlias} // алиас без моста — только порт SSH для P6 (`ssh -G`, без подключения)
+		// Мост — к серверу проверяемого профиля, если его SSH задан (алиас или Host в ~/.ssh/config).
+		SSHAlias: v.SSHAlias, Bridge: "ssh"}
 	if req.Client != "" {
 		o.Client = req.Client
-	}
-	if req.Bridge {
-		if v.SSHAlias == "" {
-			return nil, errors.New("для моста укажите SSH-алиас в «Настройках»")
-		}
-		o.Bridge = "ssh"
 	}
 	if exe, err := os.Executable(); err == nil {
 		o.SelfExe = exe
@@ -261,6 +260,11 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 		},
 	}
 	sess, err := a.e.Run(ctx, o, hooks)
+	var be *engine.BridgeError
+	if errors.As(err, &be) {
+		it := setup.BridgeResult(nil, be.Err)
+		return &RunResult{Bridge: &it, Alias: be.Alias}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +273,7 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 	}
 	vw := report.Build(sess)
 	a.lastView = &vw
-	return &vw, nil
+	return &RunResult{View: &vw}, nil
 }
 
 func (a *App) confirm(ctx context.Context, c engine.Consent) bool {

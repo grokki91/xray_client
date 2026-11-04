@@ -22,6 +22,14 @@ var (
 	ErrUnreachable = errors.New("SSH: сервер недоступен по SSH (таймаут/отказ) — это тоже улика: адрес режется целиком")
 	ErrSudo        = errors.New("на сервере нет правила sudo без пароля для xm bridge: один раз `sudo xm bridge on`")
 	ErrNoBridge    = errors.New("на сервере xm без команды bridge: `sudo xm self-update` (пока — ручной режим: импорт doctor.json)")
+	// ErrPassphrase — сервер ключ принял, но ключ под паролем: ssh в BatchMode пароль не спрашивает, а
+	// xdiag паролей не вводит и не хранит. Агент Windows держит ключ и после перезагрузки.
+	ErrPassphrase = errors.New("SSH: сервер ключ принял, но ключ защищён паролем, а xdiag пароли не вводит — один раз загрузить ключ в агент Windows: " +
+		"PowerShell от администратора `Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent`, затем `ssh-add` (ключ не по умолчанию — `ssh-add путь\\к\\ключу`) и пароль ключа")
+	// ErrOtherServer — алиас из «Настроек» ведёт на другой сервер (HostName — не адрес профиля), а Host
+	// сервера профиля в ~/.ssh/config нет: факты и окно были бы про чужой сервер.
+	ErrOtherServer = errors.New("SSH-алиас в «Настройках» ведёт на другой сервер (его HostName — не адрес проверяемого профиля), а Host с адресом этого сервера в ~/.ssh/config нет — " +
+		"укажите алиас сервера этого профиля (адрес — у итога, «сервер …») или очистите поле")
 )
 
 var reAlias = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$`)
@@ -69,7 +77,9 @@ func Args(alias, cmd string, live int) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("команда %q не из списка моста", cmd)
 	}
-	a := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+	// -v: по строке «Server accepts key» ключ под паролем отличается от ключа, которого сервер не
+	// знает (classify); stderr нигде не сохраняется.
+	a := []string{"-v", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
 		"-o", "StrictHostKeyChecking=yes", "-T", "--", alias}
 	return append(a, remote...), nil
 }
@@ -90,13 +100,28 @@ func (s *SSH) call(ctx context.Context, cmd string, live int, stdin []byte, time
 	return out, nil
 }
 
-// classify — ошибка моста по stderr ssh и xm.
+// classify — ошибка моста по stderr ssh и xm. Строки отладки ssh (-v) читаются только ради
+// «Server accepts key», остальное — по сообщениям ssh, sudo и xm.
 func classify(stderr, stdout string, err error) error {
-	s := strings.ToLower(stderr + "\n" + stdout)
+	var msg []string
+	accepted := false
+	for _, l := range strings.Split(stderr, "\n") {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "debug") {
+			accepted = accepted || strings.Contains(strings.ToLower(t), "server accepts key")
+			continue
+		}
+		msg = append(msg, l)
+	}
+	s := strings.ToLower(strings.Join(msg, "\n") + "\n" + stdout)
 	switch {
 	case strings.Contains(s, "host key verification failed"), strings.Contains(s, "no ecdsa host key"), strings.Contains(s, "host key for"):
 		return ErrHostKey
 	case strings.Contains(s, "permission denied"):
+		// Принятый сервером ключ не подписал: в BatchMode так бывает с ключом под паролем без агента.
+		// Права на файл ключа («bad permissions») — та же пара строк, но другая причина.
+		if accepted && !strings.Contains(s, "bad permissions") {
+			return ErrPassphrase
+		}
 		return ErrAuth
 	case strings.Contains(s, "could not resolve hostname"):
 		return ErrResolve

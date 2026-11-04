@@ -105,6 +105,26 @@ func TestSSHErrors(t *testing.T) {
 			t.Errorf("%q → %v", serr, err)
 		}
 	}
+	// Вывод `ssh -v -o BatchMode=yes` (OpenSSH 9.6, стенд sshd на петле; пути и отпечатки заменены).
+	// Ключ под паролем: сервер ключ принял, подписать нечем — «Permission denied», как и у
+	// чужого ключа; различает только «Server accepts key».
+	head := "debug1: Authentications that can continue: publickey\ndebug1: Next authentication method: publickey\n" +
+		"debug1: Will attempt key: C:\\\\Users\\\\user/.ssh/id_ed25519 ED25519 SHA256:AAAA explicit\n" +
+		"debug1: Offering public key: C:\\\\Users\\\\user/.ssh/id_ed25519 ED25519 SHA256:AAAA explicit\n"
+	denied := "debug1: No more authentication methods to try.\nuser@192.0.2.10: Permission denied (publickey).\n"
+	for serr, want := range map[string]error{
+		head + "debug1: Server accepts key: C:\\\\Users\\\\user/.ssh/id_ed25519 ED25519 SHA256:AAAA explicit\n" + denied: ErrPassphrase,
+		head + "debug1: Authentications that can continue: publickey\n" + denied:                                         ErrAuth,
+		head + "debug1: Server accepts key: C:\\\\Users\\\\user/.ssh/id_ed25519 ED25519 SHA256:AAAA explicit\n" +
+			"Load key \"C:\\\\Users\\\\user/.ssh/id_ed25519\": bad permissions\n" + denied: ErrAuth,
+	} {
+		s := &SSH{Alias: "xm-ui", Exe: "ssh", Run: func(context.Context, string, []string, []byte) ([]byte, []byte, error) {
+			return nil, []byte(serr), errors.New("exit status 255")
+		}}
+		if _, err := s.Facts(context.Background(), "00"); !errors.Is(err, want) {
+			t.Errorf("%q → %v, ожидалось %v", serr, err, want)
+		}
+	}
 	// xm без bridge печатает справку — это не JSON.
 	s := &SSH{Alias: "xm-ui", Exe: "ssh", Run: func(context.Context, string, []string, []byte) ([]byte, []byte, error) {
 		return []byte("xm — менеджер Xray   sudo xm <команда>"), nil, nil

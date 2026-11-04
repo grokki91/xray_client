@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,47 +19,129 @@ import (
 	"github.com/grokki91/xray_client/internal/redact"
 )
 
-// phase3 — сервер изнутри: мост SSH и/или импорт файлов xm.
-func (r *run) phase3(ctx context.Context) {
-	for _, im := range r.o.Imports {
-		r.importFile(im)
+// BridgeError — мост к серверу профиля задан, но не готов: сеанс остановлен до первой пробы. Без
+// моста сервер виден только снаружи, и неоднозначный сбой кончается «без окна сервера причину не
+// назвать», а такой отказ чинится за минуту — в «Настройках», на ПК или на сервере. Недоступность
+// SSH сюда не входит: это улика (адрес режется целиком), сеанс идёт.
+type BridgeError struct {
+	Code  string // bridgeCode: auth, passphrase, host_key, resolve, sudo, no_bridge, older, newer, alias, no_ssh, other_server
+	Alias string // какой алиас пробовали: окно показывает его в «Настройках», в отчёт и историю он не идёт
+	Err   error
+}
+
+func (e *BridgeError) Error() string {
+	return "SSH-мост не готов, диагностика не начиналась: " + e.Err.Error()
+}
+func (e *BridgeError) Unwrap() error { return e.Err }
+
+// bridgeStart — мост до сетевых проб: алиас сервера профиля, согласие и `xm bridge facts`. Мост
+// задан для этого сервера — он должен работать: отказ, который чинится настройкой, — BridgeError.
+// SSH к серверу профиля не задан вовсе — сеанс без моста (xdiag работает и без сервера).
+func (r *run) bridgeStart(ctx context.Context) error {
+	if r.o.Bridge != "ssh" || ctx.Err() != nil {
+		return nil
 	}
-	if r.o.Bridge != "ssh" || r.o.SSHAlias == "" {
-		if len(r.o.Imports) > 0 {
-			r.sess.Bridge = "manual"
+	alias, other := r.bridgeAlias()
+	if alias == "" {
+		if other {
+			// Факты и окно были бы про чужой сервер: сверка хэшей «уличила» бы профиль, который
+			// здесь ни при чём.
+			return &BridgeError{Code: "other_server", Alias: r.o.SSHAlias, Err: bridge.ErrOtherServer}
 		}
-		return
+		return nil
 	}
-	// Алиас от другого сервера: факты и окно были бы про другой сервер — сверка хэшей «уличила» бы
-	// профиль, который здесь ни при чём.
-	if r.aliasOther(r.o.SSHAlias) {
-		r.note("Мост пропущен: SSH-алиас в «Настройках» ведёт на другой сервер (его HostName — не адрес профиля)")
-		r.missing("bridge_other_server")
-		r.step(3, "S1", "Сервер: мост SSH", "skip", "алиас — от другого сервера")
-		return
+	if r.o.SSHAlias != "" && alias != r.o.SSHAlias {
+		r.note("Мост: алиас в «Настройках» ведёт на другой сервер — взят Host сервера профиля из ~/.ssh/config")
 	}
-	if !r.confirm(ctx, Consent{Kind: "bridge", Text: "Подключиться к серверу по SSH (" + r.o.SSHAlias + ") и выполнить только чтение: " +
-		"`sudo -n xm bridge facts`, `health`, `doctor`? На сервер уйдёт только случайная соль сессии."}) {
+	if !r.confirm(ctx, Consent{Kind: "bridge", Text: "Подключиться к серверу по SSH (" + alias + ") и выполнить только чтение: " +
+		"`sudo -n xm bridge facts`, `health`, `doctor`? На сервер уйдёт только случайная соль сессии. «Нет» — диагностика без фактов с сервера."}) {
 		r.note("Мост к серверу: пользователь отказался")
-		return
+		return nil
 	}
 	r.sess.Bridge = "ssh"
-	b, err := r.e.NewSSH(r.o.SSHAlias)
-	if err != nil {
-		r.bridgeFail(err)
-		return
-	}
 	r.step(3, "S1", "Сервер: факты (xm bridge facts)", "run", "")
-	f, err := b.Facts(ctx, r.red.SaltHex())
+	b, err := r.e.NewSSH(alias)
+	var f *bridge.Facts
+	if err == nil {
+		f, err = b.Facts(ctx, r.red.SaltHex())
+	}
 	if err != nil {
+		if code := bridgeCode(err); r.bridgeBlocks(code, alias) && ctx.Err() == nil {
+			r.step(3, "S1", "Сервер: мост SSH", "fail", err.Error())
+			return &BridgeError{Code: code, Alias: alias, Err: err}
+		}
 		r.bridgeFail(err)
-		return
+		return nil
 	}
 	r.put(evidence.Evidence{ID: "S0", Source: evidence.FromNetwork, Reliability: evidence.High,
 		Facts: map[string]any{"ssh": "ok"}, Summary: "SSH-мост: подключение к серверу есть"})
 	r.factsEvidence(f, true)
 	r.step(3, "S1", "Сервер: факты (xm bridge facts)", "ok", "Xray "+f.Xray.Version)
+	r.br = b
+	return nil
+}
 
+// bridgeBlocks — отказ моста, который чинится настройкой: ключ, агент, known_hosts, алиас,
+// ssh.exe, sudo, xm. Не останавливают сеанс: SSH не дошёл (улика), нет xm на сервере (сервер не
+// под xm), неизвестная ошибка и имя HostName, которое не резолвится (DNS сети покажут пробы).
+func (r *run) bridgeBlocks(code, alias string) bool {
+	switch code {
+	case "alias", "no_ssh", "host_key", "auth", "passphrase", "sudo", "no_bridge", "newer", "older":
+		return true
+	case "resolve":
+		cfg := r.sshConfig()
+		return cfg == nil || !slices.Contains(cfg.Aliases(), alias)
+	}
+	return false
+}
+
+// bridgeAlias — SSH-алиас сервера профиля. Алиас «Настроек» один, а серверов у владельца бывает
+// несколько: он берётся, если ведёт на сервер профиля или этого не проверить (HostName — имя, не
+// IP); иначе — Host из ~/.ssh/config, у которого HostName — адрес профиля. other — алиас
+// «Настроек» ведёт на другой сервер, а своего Host у сервера профиля нет.
+func (r *run) bridgeAlias() (alias string, other bool) {
+	cfg := r.sshConfig()
+	if a := r.o.SSHAlias; a != "" {
+		if cfg == nil {
+			return a, false
+		}
+		if h, _ := cfg.Resolve(a); !r.otherServer(h) {
+			return a, false
+		}
+		other = true
+	}
+	if cfg == nil || r.prof == nil {
+		return "", other
+	}
+	addrs := []string{r.prof.Address}
+	for _, ip := range r.profileIPs() {
+		addrs = append(addrs, ip.String())
+	}
+	if a, ok := cfg.FindName(addrs...); ok {
+		return a, false
+	}
+	return "", other
+}
+
+func (r *run) sshConfig() *bridge.SSHConfig {
+	if r.e.SSHConfig == nil {
+		return nil
+	}
+	return r.e.SSHConfig()
+}
+
+// phase3 — сервер изнутри: журнал и окно через мост из bridgeStart и/или импорт файлов xm.
+func (r *run) phase3(ctx context.Context) {
+	for _, im := range r.o.Imports {
+		r.importFile(im)
+	}
+	b := r.br
+	if b == nil {
+		if len(r.o.Imports) > 0 && r.sess.Bridge == "" {
+			r.sess.Bridge = "manual"
+		}
+		return
+	}
 	r.step(3, "S2", "Сервер: журнал здоровья", "run", "")
 	if h, err := b.Health(ctx); err == nil {
 		r.healthEvidence(h)
@@ -127,35 +210,28 @@ func (r *run) otherServer(addr string) bool {
 	return len(ips) > 0
 }
 
-// aliasOther — HostName SSH-алиаса — IP другого сервера (имя без DNS не сверить — не судим).
-func (r *run) aliasOther(alias string) bool {
-	if r.e.SSHConfig == nil || r.prof == nil {
-		return false
-	}
-	cfg := r.e.SSHConfig()
-	if cfg == nil {
-		return false
-	}
-	h, _ := cfg.Resolve(alias)
-	return r.otherServer(h)
-}
-
 func (r *run) bridgeFail(err error) {
 	f := map[string]any{"error": bridgeCode(err)}
+	sum := "SSH-мост: " + err.Error()
 	switch code := f["error"]; {
+	case code == "unreachable" && r.facts.DefaultViaTUN:
+		// ssh.exe не привязан к физическому адаптеру, как пробы: маршрут по умолчанию — в TUN, и SSH
+		// шёл через тоннель клиента. Его таймаут — про тоннель, а не про SSH сервера.
+		sum = "SSH-мост не дошёл, но шёл через тоннель клиента (маршрут по умолчанию — в TUN): о SSH сервера это не говорит"
+		r.missing("bridge_tun")
 	case code == "unreachable":
 		f["ssh"] = "unreachable"
-	case code == "host_key" || code == "auth" || code == "sudo" || code == "no_bridge" || code == "newer" || code == "older":
+	case code == "host_key" || code == "auth" || code == "passphrase" || code == "sudo" || code == "no_bridge" || code == "newer" || code == "older":
 		f["ssh"] = "ok" // отказ ключа, sudo или xm — уже после соединения: адрес по SSH доступен
 	}
-	r.put(evidence.Evidence{ID: "S0", Source: evidence.FromNetwork, Reliability: evidence.High, Facts: f, Summary: "SSH-мост: " + err.Error()})
-	r.step(3, "S1", "Сервер: мост SSH", "fail", err.Error())
+	r.put(evidence.Evidence{ID: "S0", Source: evidence.FromNetwork, Reliability: evidence.High, Facts: f, Summary: sum})
+	r.step(3, "S1", "Сервер: мост SSH", "fail", sum)
 	r.note("Мост не сработал — ручной режим: на сервере `" + strings.Join(bridge.ManualCommands(r.o.LiveSeconds), "`, `") + "`, затем «Импорт»")
 }
 
 func bridgeCode(err error) string {
 	for code, e := range map[string]error{"alias": bridge.ErrAlias, "no_ssh": bridge.ErrNoSSH, "host_key": bridge.ErrHostKey,
-		"auth": bridge.ErrAuth, "resolve": bridge.ErrResolve, "unreachable": bridge.ErrUnreachable, "sudo": bridge.ErrSudo,
+		"auth": bridge.ErrAuth, "passphrase": bridge.ErrPassphrase, "resolve": bridge.ErrResolve, "unreachable": bridge.ErrUnreachable, "sudo": bridge.ErrSudo,
 		"no_bridge": bridge.ErrNoBridge, "newer": bridge.ErrNewerContract, "older": bridge.ErrOlderContract} {
 		if errors.Is(err, e) {
 			return code

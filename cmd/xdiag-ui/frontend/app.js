@@ -241,7 +241,7 @@ const fmtWhen = (at) => new Date(at).toLocaleString("ru-RU", { day: "2-digit", m
 // ─── События ядра ───────────────────────────────────────────────────────────
 const stepNodes = new Map();
 // Доля пути по шагу: порядок фаз ядра (0 → Windows и клиенты, 1 → сеть, 2 → сервер, 3–4 → мост, захват).
-const STEP_AT = { W: 4, C: 10, N1: 20, N5: 24, C10: 30, C11: 34, P: 40, P1: 40, P6: 46, P3: 52, P3m: 70, P2: 80, P4: 84, S1: 88, S2: 90, S3: 93, C7: 96, save: 98 };
+const STEP_AT = { W: 4, C: 10, S1: 14, N1: 20, N5: 24, C10: 30, C11: 34, P: 40, P1: 40, P6: 46, P3: 52, P3m: 70, P2: 80, P4: 84, S2: 90, S3: 93, C7: 96, save: 98 };
 let progressPct = 0;
 let waitTimer = null;
 let t0 = 0;
@@ -331,7 +331,6 @@ async function init() {
     }
     const s = await api().Settings();
     applyTheme(s.theme);
-    applyBridgeOpt(s.alias, s.use_bridge);
     const h = (await api().History()) || [];
     if (h.length) setLast(fmtWhen(h[0].at), /^ok/.test(h[0].code) ? "ok" : "problem");
   } catch (e) { /* окно работает и без настроек */ }
@@ -382,9 +381,11 @@ async function run() {
   $("cSteps").textContent = "";
   showDTab("steps");
   let v = null;
+  bridgeBlock = null;
   try {
-    v = await api().Run({ client: $("client").value, bridge: $("optBridge").checked, capture: $("optCapture").checked,
-      offline: false });
+    const res = await api().Run({ client: $("client").value, capture: $("optCapture").checked, offline: false });
+    if (res && res.bridge) bridgeBlock = { ...res, field: ((await api().Settings()).alias || "").trim() }; // алиас, с которым шёл запуск
+    else v = res && res.view;
     $("extrasNote").textContent = "";
   } catch (e) {
     await modal({ title: "Диагностика не выполнена", text: String(e), no: null, yes: "Закрыть" });
@@ -398,6 +399,12 @@ async function run() {
     showDTab("verdict");
   } else if (current) renderVerdict(current);
   else idleHero();
+  if (bridgeBlock) {
+    // Мост к серверу профиля задан, но не готов: сеанс не начинался — к мосту в «Настройках».
+    showTab("settings");
+    $("bridgeItem").scrollIntoView({ block: "center" });
+    $("sAlias").focus();
+  }
 }
 
 function list(node, items, mk) {
@@ -615,13 +622,14 @@ $("hClear").addEventListener("click", async () => {
 let hasURI = false;
 let profMode = "";      // "" | "edit" — вставляется новый | "del" — удалится при сохранении
 let bridgeCheck = null; // {alias, item} — последняя проверка моста (до закрытия окна)
+let bridgeBlock = null; // {bridge, alias, field} — «Диагностировать» остановлен: мост сервера профиля не готов
 let cleanForm = null;   // форма как сохранена
 const dirs = { hiddify: "", v2rayn: "" };
 
 function formValues() {
   return {
     retention_days: parseInt($("sRet").value, 10) || 0, export_include_address: $("sAddr").checked, client: $("sClient").value,
-    live_seconds: parseInt($("sLive").value, 10) || 60, use_bridge: $("sBridge").checked, reference: $("sRef").checked,
+    live_seconds: parseInt($("sLive").value, 10) || 60, reference: $("sRef").checked,
     alias: $("sAlias").value.trim(), hiddify_dir: dirs.hiddify, v2rayn_dir: dirs.v2rayn,
     new_uri: profMode === "del" ? "-" : profMode === "edit" ? $("sUri").value.trim() : "",
   };
@@ -655,9 +663,7 @@ async function loadSettings(force) {
   $("sRet").value = s.retention_days;
   $("sLive").value = s.live_seconds;
   $("sRef").checked = !!s.reference;
-  $("sBridge").checked = !!s.use_bridge;
   $("sAddr").checked = !!s.export_include_address;
-  bridgeToggle();
   cleanForm = JSON.stringify(formValues());
   markDirty();
   profileControls();
@@ -699,9 +705,14 @@ function renderStatus(st) {
   setStat($("stProf"), p);
   setNote($("stProfNote"), p.note);
 
-  // Мост: без сети — алиас и ssh.exe; результат кнопки «Проверить» — для того же алиаса.
+  // Мост: без сети — алиас и ssh.exe; результат кнопки «Проверить» — для того же алиаса; отказ,
+  // на котором остановилась диагностика, — пока алиас в поле не меняли и не нажата «Проверить».
   let b = st.bridge;
-  if (b.state === "idle" && bridgeCheck && bridgeCheck.alias === $("sAlias").value.trim()) b = bridgeCheck.item;
+  const alias = $("sAlias").value.trim();
+  if (bridgeBlock && alias === bridgeBlock.field) {
+    const via = bridgeBlock.alias && bridgeBlock.alias !== alias ? "Host «" + bridgeBlock.alias + "» сервера профиля из ~/.ssh/config. " : "";
+    b = { ...bridgeBlock.bridge, note: "Диагностика не начиналась: мост к серверу профиля не готов. " + via + (bridgeBlock.bridge.note || "") };
+  } else if (b.state === "idle" && bridgeCheck && bridgeCheck.alias === alias) b = bridgeCheck.item;
   setStat($("stBridge"), b);
   setNote($("stBridgeNote"), b.note);
   $("bCheck").disabled = st.bridge.state === "off" || st.bridge.state === "bad";
@@ -747,20 +758,12 @@ $("pShow").addEventListener("click", async () => {
   } catch (e) { modal({ title: "Не прочитано", text: String(e), no: null, yes: "Закрыть" }); }
 });
 
-// «Опрашивать сервер» без алиаса не имеет смысла: выключено, пока алиас пуст.
-function bridgeToggle() {
-  const has = $("sAlias").value.trim() !== "";
-  if (!has) $("sBridge").checked = false;
-  $("sBridge").disabled = !has;
-  $("sBridgeHint").textContent = has
-    ? "Сразу отмечает «Мост (SSH)» на вкладке «Диагностика». Перед подключением xdiag всё равно спросит согласие."
-    : "Сначала укажите алиас. Без этой галочки мост включается на вкладке «Диагностика» для отдельного запуска.";
-}
-$("sAlias").addEventListener("input", () => { bridgeToggle(); edited(300); });
+$("sAlias").addEventListener("input", () => edited(300));
 
 $("bCheck").addEventListener("click", async () => {
   const alias = $("sAlias").value.trim();
   if (!alias) return;
+  bridgeBlock = null;
   const b = $("bCheck");
   b.disabled = true;
   b.classList.add("busy");
@@ -790,7 +793,7 @@ document.querySelectorAll(".ctile").forEach((tile) => {
   tile.querySelector("[data-auto]").addEventListener("click", () => { dirs[c] = ""; edited(); });
 });
 
-["sClient", "sRet", "sLive", "sRef", "sBridge", "sAddr"].forEach((id) => {
+["sClient", "sRet", "sLive", "sRef", "sAddr"].forEach((id) => {
   $(id).addEventListener("input", () => { setMsg(""); markDirty(); });
   $(id).addEventListener("change", markDirty);
 });
@@ -801,7 +804,6 @@ $("sSave").addEventListener("click", async () => {
   try {
     await api().SaveSettings(f);
     await loadSettings(true);
-    applyBridgeOpt(f.alias, f.use_bridge);
     setMsg("Сохранено");
     setTimeout(() => { if ($("sMsg").textContent === "Сохранено") setMsg(""); }, 2000);
   } catch (e) {
@@ -810,14 +812,6 @@ $("sSave").addEventListener("click", async () => {
   }
 });
 $("sReset").addEventListener("click", () => { setMsg(""); loadSettings(true); });
-
-// «Мост (SSH)» на вкладке «Диагностика»: недоступен без алиаса, умолчание — из настроек.
-function applyBridgeOpt(alias, use) {
-  const o = $("optBridge");
-  o.disabled = !alias;
-  o.checked = !!alias && !!use;
-  o.parentElement.title = alias ? "Факты с сервера по SSH: xm bridge facts|health|doctor" : "Сначала укажите SSH-алиас в «Настройках»";
-}
 
 // ─── Данные ─────────────────────────────────────────────────────────────────
 async function loadData() {

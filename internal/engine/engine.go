@@ -48,8 +48,8 @@ type Options struct {
 	Offline   bool // только фаза 0
 	Reference bool // эталонная проба P3/P3m
 
-	Bridge      string       // "" | "ssh"
-	SSHAlias    string       // алиас из ~/.ssh/config: мост (Bridge=ssh) и порт SSH для P6
+	Bridge      string       // "" | "ssh": мост к серверу профиля, если его SSH задан (алиас или Host в ~/.ssh/config)
+	SSHAlias    string       // алиас из «Настроек»: мост, если ведёт на сервер профиля, и порт SSH для P6
 	LiveSeconds int          // окно xm doctor
 	Imports     []Import     // файлы xm (ручной мост)
 	PastedLogs  string       // экспорт логов клиента
@@ -246,6 +246,8 @@ type run struct {
 	serverIP []net.IP
 	mu       sync.Mutex
 
+	br SSHBridge // мост к серверу профиля, если факты (bridgeStart) пришли; журнал и окно — в фазе 3
+
 	budget      *netprobe.Budget // бюджет сервера профиля (фаза 2)
 	budgetStart netprobe.Usage   // расход на начало сеанса — в отчёт идёт разница
 
@@ -316,6 +318,11 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 	}()
 
 	r.phase0(ctx)
+	// Мост — до сетевых проб: профиль уже известен (фаза 0), и неготовый мост его сервера
+	// останавливает сеанс, пока к серверу не ушло ни одной пробы.
+	if err := r.bridgeStart(ctx); err != nil {
+		return nil, err
+	}
 	if !o.Offline && ctx.Err() == nil {
 		r.phase1(ctx)
 		if ctx.Err() == nil {

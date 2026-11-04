@@ -30,9 +30,8 @@ const Entropy = "xdiag/v1"
 type Settings struct {
 	RetentionDays        int    `json:"retention_days"`
 	ExportIncludeAddress bool   `json:"export_include_address"`
-	Client               string `json:"client"`       // auto | hiddify | v2rayn
-	LiveSeconds          int    `json:"live_seconds"` // окно xm doctor
-	UseBridge            bool   `json:"use_bridge"`
+	Client               string `json:"client"`          // auto | hiddify | v2rayn
+	LiveSeconds          int    `json:"live_seconds"`    // окно xm doctor
 	Reference            bool   `json:"reference"`       // эталонная проба
 	Theme                string `json:"theme,omitempty"` // окно: "" — как в Windows | dark | light
 }

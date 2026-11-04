@@ -457,7 +457,7 @@ func TestScreen8(t *testing.T) {
 
 func TestMissingTexts(t *testing.T) {
 	e, _ := Load()
-	for _, k := range []string{"ssh_port", "ssh_port22", "reference_off", "client_logs", "doctor_other_server", "bridge_other_server"} {
+	for _, k := range []string{"ssh_port", "ssh_port22", "reference_off", "client_logs", "doctor_other_server", "bridge_tun"} {
 		if e.MissingText(k) == "" {
 			t.Errorf("нет текста missing.%s", k)
 		}
