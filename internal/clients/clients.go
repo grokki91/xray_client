@@ -70,7 +70,10 @@ type Detection struct {
 	LAN         bool   `json:"lan"`
 	TestURL     string `json:"-"` // URL теста задержки клиента
 	RUDirect    *bool  `json:"ru_direct"`
-	Support     string `json:"support"` // full | partial
+	// Detour — соединение с сервером клиент ведёт внутри другого тоннеля (Hiddify: WARP в режиме
+	// «прокси поверх WARP»): TCP до сервера в таблице соединений ПК не видно.
+	Detour  bool   `json:"detour,omitempty"`
+	Support string `json:"support"` // full | partial
 }
 
 // LogSummary — сводка журналов клиента.
@@ -128,9 +131,14 @@ var logPatterns = []struct {
 	{"invalid_conn", regexp.MustCompile(`(?i)processed invalid connection`)},
 	{"x509", regexp.MustCompile(`(?i)\bx509:`)},
 	{"eof", regexp.MustCompile(`\bEOF\b`)},
-	{"reset", regexp.MustCompile(`(?i)connection reset|forcibly closed|connection was aborted`)},
+	// RST от сервера или посредника: «forcibly closed by the remote host» (WSAECONNRESET).
+	{"reset", regexp.MustCompile(`(?i)connection reset|forcibly closed`)},
+	// «An established connection was aborted by the software in your host machine»
+	// (WSAECONNABORTED) — не RST: соединение закрыл сам Windows, когда отправленное не
+	// подтверждалось (тишина, заморозка по пути), реже — локальный сетевой фильтр.
+	{"aborted", regexp.MustCompile(`(?i)connection was aborted|software caused connection abort`)},
 	{"refused", regexp.MustCompile(`(?i)connection refused|actively refused`)},
-	{"timeout", regexp.MustCompile(`(?i)i/o timeout|context deadline exceeded|handshake timeout|timed out`)},
+	{"timeout", regexp.MustCompile(`(?i)i/o timeout|context deadline exceeded|handshake timeout|timed out|did not properly respond`)},
 	{"tun_error", regexp.MustCompile(`(?i)(configure|create|open|start)[^\n]{0,40}tun[^\n]{0,60}(error|fail)|wintun[^\n]{0,60}(error|fail)|tun device`)},
 	{"port_busy", regexp.MustCompile(`(?i)address already in use|only one usage of each socket address|bind: an attempt was made`)},
 	{"core_failed", regexp.MustCompile(`(?i)failed to (start|run) (the )?core|start service[^\n]{0,30}(error|fail)|core (process )?(exited|crashed)|panic:|createService - null`)},
@@ -146,6 +154,10 @@ var AppError = map[string]bool{"core_failed": true, "port_busy": true, "tun_erro
 // ошибки DNS — не про сервер и считаются отдельно (direct_failed): иначе сотни таймаутов
 // прямого DNS читаются как «таймаут ×372» к серверу.
 var reDirect = regexp.MustCompile(`(?i)outbound[/ ]direct|dns[-/]direct`)
+
+// reLoopback — соединение приложения с локальным прокси клиента (127.0.0.1:порт → 127.0.0.1:порт):
+// его обрыв закрыл браузер или xdiag, а не сервер — в сбои через сервер не идёт.
+var reLoopback = regexp.MustCompile(`(?:127\.\d+\.\d+\.\d+|\[::1\]):\d+->(?:127\.\d+\.\d+\.\d+|\[::1\]):\d+`)
 
 // reFail — в строке прямого выхода есть сбой.
 var reFail = regexp.MustCompile(`(?i)\b(error|errors|fail|failed|failure|timeout|refused|reset|eof|unreachable)\b|deadline exceeded|timed out`)
@@ -210,6 +222,9 @@ func scanText(r io.Reader, s *LogSummary) {
 				s.direct = keep(s.direct, line, maxDirectLines)
 			}
 			continue // прямой выход — не про тоннель: в хронологию не идёт
+		}
+		if reLoopback.MatchString(line) {
+			continue
 		}
 		hit, fail, app := false, false, false
 		for _, p := range logPatterns {

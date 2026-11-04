@@ -26,7 +26,7 @@ var ErrBudget = errors.New("бюджет проб к серверу исчерп
 
 // Usage — текущий расход для показа пользователю.
 type Usage struct {
-	TLS      int `json:"tls"`
+	TLS      int `json:"tls"` // TLS к серверу за окно — вместе с хендшейками самого клиента (Client)
 	TLSMax   int `json:"tls_max"`
 	TCP      int `json:"tcp"`
 	TCPMax   int `json:"tcp_max"`
@@ -34,6 +34,10 @@ type Usage struct {
 	TotalTLS int `json:"total_tls"`
 	TotalTCP int `json:"total_tcp"`
 	Refused  int `json:"refused"`
+	// Client — TLS-хендшейки самого клиента к серверу за окно (таблица соединений, C11);
+	// TotalClient — за всё время.
+	Client      int `json:"client_tls,omitempty"`
+	TotalClient int `json:"total_client_tls,omitempty"`
 }
 
 // Budget потокобезопасен; один на сервер (адрес+порт) на всё время жизни процесса: окно
@@ -46,8 +50,10 @@ type Budget struct {
 
 	mu       sync.Mutex
 	tls, tcp []time.Time
+	ext      []time.Time // TLS-хендшейки самого клиента (Observe): в окне TLS, не в TCP приложения
 	totTLS   int
 	totTCP   int
+	totExt   int
 	refused  int
 	now      func() time.Time
 	onChange func(Usage)
@@ -67,7 +73,33 @@ func (b *Budget) OnChange(f func(Usage)) {
 
 func (b *Budget) prune(now time.Time) {
 	b.tls = keepAfter(b.tls, now.Add(-b.TLSWindow))
+	b.ext = keepAfter(b.ext, now.Add(-b.TLSWindow))
 	b.tcp = keepAfter(b.tcp, now.Add(-b.TCPWindow))
+}
+
+// tlsMarks — все TLS к серверу в окне по времени: пробы приложения и хендшейки клиента.
+func (b *Budget) tlsMarks() []time.Time {
+	out := append(append([]time.Time(nil), b.tls...), b.ext...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	return out
+}
+
+// Observe — TLS-хендшейк к тому же серверу открыл сам клиент (таблица соединений Windows, C11).
+// Он в окне TLS для Wait: «заморозка по отпечатку» считает все хендшейки с адреса ПК (приложение
+// C), и проба приложения ждёт слота, пока сумма в окне не ниже порога. Can, Acquire и Upgrade его
+// не считают: проба, уже дождавшаяся слота, не должна получить отказ оттого, что клиент тем
+// временем открыл соединение (эталон стал бы «пропущено по лимиту»). В TCP-лимит приложения
+// («не выделяться своими соединениями») не входит.
+func (b *Budget) Observe(t time.Time) {
+	b.mu.Lock()
+	b.ext = append(b.ext, t)
+	b.totExt++
+	now := b.now()
+	u, f := b.usageLocked(now), b.onChange
+	b.mu.Unlock()
+	if f != nil {
+		f(u)
+	}
 }
 
 func keepAfter(ts []time.Time, t time.Time) []time.Time {
@@ -145,7 +177,7 @@ func (b *Budget) Upgrade() error {
 func (b *Budget) WaitTLS() time.Duration { return b.Wait(TLS) }
 
 // Wait — через сколько можно будет открыть соединение вида k (0 — сейчас): TLS-хендшейк
-// тратит и слот TCP.
+// тратит и слот TCP; в окне TLS — и хендшейки самого клиента (Observe).
 func (b *Budget) Wait(k Kind) time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -155,9 +187,11 @@ func (b *Budget) Wait(k Kind) time.Duration {
 	if len(b.tcp) >= b.TCPMax {
 		w = b.tcp[len(b.tcp)-b.TCPMax].Add(b.TCPWindow).Sub(now)
 	}
-	if k == TLS && len(b.tls) >= b.TLSMax {
-		if t := b.tls[len(b.tls)-b.TLSMax].Add(b.TLSWindow).Sub(now); t > w {
-			w = t
+	if k == TLS {
+		if all := b.tlsMarks(); len(all) >= b.TLSMax {
+			if t := all[len(all)-b.TLSMax].Add(b.TLSWindow).Sub(now); t > w {
+				w = t
+			}
 		}
 	}
 	if w < 0 {
@@ -175,9 +209,11 @@ func (b *Budget) Usage() Usage {
 
 func (b *Budget) usageLocked(now time.Time) Usage {
 	b.prune(now)
-	u := Usage{TLS: len(b.tls), TLSMax: b.TLSMax, TCP: len(b.tcp), TCPMax: b.TCPMax, TotalTLS: b.totTLS, TotalTCP: b.totTCP, Refused: b.refused}
-	if len(b.tls) >= b.TLSMax {
-		u.WaitSec = int(b.tls[len(b.tls)-b.TLSMax].Add(b.TLSWindow).Sub(now).Seconds()) + 1
+	all := b.tlsMarks()
+	u := Usage{TLS: len(all), TLSMax: b.TLSMax, TCP: len(b.tcp), TCPMax: b.TCPMax, TotalTLS: b.totTLS, TotalTCP: b.totTCP, Refused: b.refused,
+		Client: len(b.ext), TotalClient: b.totExt}
+	if len(all) >= b.TLSMax {
+		u.WaitSec = int(all[len(all)-b.TLSMax].Add(b.TLSWindow).Sub(now).Seconds()) + 1
 	}
 	return u
 }
@@ -187,6 +223,7 @@ func (u Usage) Since(start Usage) Usage {
 	u.TotalTLS -= start.TotalTLS
 	u.TotalTCP -= start.TotalTCP
 	u.Refused -= start.Refused
+	u.TotalClient -= start.TotalClient
 	return u
 }
 

@@ -17,6 +17,8 @@ func TestLogSummary(t *testing.T) {
 		{clients.LogSummary{Found: true, Counts: map[string]int{}}, "Логи клиента: характерных ошибок нет"},
 		{clients.LogSummary{Found: true, Counts: map[string]int{"direct_failed": 372}},
 			"Логи клиента: через сервер — ошибок нет; мимо сервера (прямые проверки и DNS клиента) — сбоев ×372"},
+		{clients.LogSummary{Found: true, Counts: map[string]int{"aborted": 8, "reset": 1}},
+			"Логи клиента: через сервер — обрыв по тишине (Windows закрыл соединение: сервер не подтверждал данные) ×8, обрыв (RST) ×1"},
 		{clients.LogSummary{Found: true, Counts: map[string]int{"eof": 12, "timeout": 3, "tun_error": 1, "direct_failed": 40}},
 			"Логи клиента: через сервер — соединение закрыто (EOF) ×12, таймаут ×3; сам клиент — ошибка TUN ×1; " +
 				"мимо сервера (прямые проверки и DNS клиента) — сбоев ×40"},

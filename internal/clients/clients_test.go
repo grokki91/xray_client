@@ -89,6 +89,14 @@ func TestHiddify(t *testing.T) {
 	if d.RUDirect == nil || !*d.RUDirect {
 		t.Fatal("регион ru → прямой маршрут для РФ")
 	}
+	// WARP: «прокси поверх WARP» прячет TCP до сервера внутри WireGuard, «WARP поверх прокси» — нет.
+	for mode, want := range map[string]bool{"proxyOverWarp": true, "warpOverProxy": false} {
+		write(t, filepath.Join(dir, "shared_preferences.json"), `{"flutter.enable-warp":true,"flutter.warp-detour-mode":"`+mode+`"}`)
+		if got := h.Detect(context.Background(), env).Detour; got != want {
+			t.Errorf("WARP %s: detour %v", mode, got)
+		}
+	}
+	write(t, filepath.Join(dir, "shared_preferences.json"), `{"flutter.service-mode":"vpn","flutter.mixed-port":12334,"flutter.allow-connection-from-lan":true,"flutter.region":"ru"}`)
 	ps, err := h.Profiles(context.Background(), env, d)
 	if err != nil || len(ps) != 1 || !ps[0].Active || ps[0].Name != "Мой сервер" || ps[0].SubURL == "" || ps[0].Path != "/p" {
 		t.Fatalf("%v %+v", err, ps)
@@ -160,6 +168,26 @@ func TestScanTextPasted(t *testing.T) {
 		"ERROR outbound/vless[proxy]: dial tcp 198.51.100.7:443: i/o timeout")
 	if s.Counts["direct_failed"] != 2 || s.Counts["timeout"] != 1 {
 		t.Fatalf("%+v", s.Counts)
+	}
+}
+
+// Живой случай 2026-11-03: было «через сервер — обрыв (RST) ×104», а RST не было.
+// «An established connection was aborted by the software in your host machine» (WSAECONNABORTED) —
+// соединение закрыл сам Windows, когда сервер перестал подтверждать данные; строки петли
+// (приложение ↔ локальный прокси клиента) — не про сервер; «did not properly respond»
+// (WSAETIMEDOUT) — таймаут.
+func TestScanAbortedNotReset(t *testing.T) {
+	s := ScanText(strings.Join([]string{
+		"ERROR [74994072 1m5s] connection: connection download closed: read tcp 192.0.2.10:54571->203.0.113.7:443: wsarecv: " +
+			"An established connection was aborted by the software in your host machine.",
+		"ERROR [1280550574 1.48s] connection: connection upload closed: raw-read tcp 127.0.0.1:12334->127.0.0.1:55712: " +
+			"An established connection was aborted by the software in your host machine.",
+		"[Info] transport/internet/splithttp: failed to POST > read tcp 192.0.2.10:60728->203.0.113.7:443: wsarecv: A connection attempt failed " +
+			"because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.",
+		"ERROR [12 0.1s] connection: open connection to www.example.org:443 using outbound/vless[srv]: wsarecv: An existing connection was forcibly closed by the remote host.",
+	}, "\n"))
+	if s.Counts["aborted"] != 1 || s.Counts["reset"] != 1 || s.Counts["timeout"] != 1 || len(s.Lines) != 3 {
+		t.Fatalf("%+v %q", s.Counts, s.Lines)
 	}
 }
 

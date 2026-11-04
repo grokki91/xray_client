@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/grokki91/xray_client/internal/capture"
 	"github.com/grokki91/xray_client/internal/clients"
 	"github.com/grokki91/xray_client/internal/evidence"
+	"github.com/grokki91/xray_client/internal/netprobe"
 	"github.com/grokki91/xray_client/internal/redact"
 )
 
@@ -25,6 +27,14 @@ func (r *run) phase3(ctx context.Context) {
 		if len(r.o.Imports) > 0 {
 			r.sess.Bridge = "manual"
 		}
+		return
+	}
+	// Алиас от другого сервера: факты и окно были бы про другой сервер — сверка хэшей «уличила» бы
+	// профиль, который здесь ни при чём.
+	if r.aliasOther(r.o.SSHAlias) {
+		r.note("Мост пропущен: SSH-алиас в «Настройках» ведёт на другой сервер (его HostName — не адрес профиля)")
+		r.missing("bridge_other_server")
+		r.step(3, "S1", "Сервер: мост SSH", "skip", "алиас — от другого сервера")
 		return
 	}
 	if !r.confirm(ctx, Consent{Kind: "bridge", Text: "Подключиться к серверу по SSH (" + r.o.SSHAlias + ") и выполнить только чтение: " +
@@ -72,8 +82,62 @@ func (r *run) phase3(ctx context.Context) {
 		r.step(3, "S3", "Сервер: окно xm doctor", "fail", r.red.String(err.Error()))
 		return
 	}
-	r.doctorEvidence(d, "bridge")
+	if !r.doctorEvidence(d, "bridge") {
+		r.step(3, "S3", "Сервер: окно xm doctor", "warn", "с другого сервера — не учтено")
+		return
+	}
 	r.step(3, "S3", "Сервер: окно xm doctor", "ok", d.Verdict.Code)
+}
+
+// profileIPs — адреса сервера профиля: разрешённые в фазе 2, иначе IP из профиля или DNS.
+func (r *run) profileIPs() []netip.Addr {
+	var out []netip.Addr
+	for _, ip := range r.serverIP {
+		if a, ok := netip.AddrFromSlice(ip); ok {
+			out = append(out, a.Unmap())
+		}
+	}
+	if len(out) > 0 || r.prof == nil {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	ips, _ := netprobe.LookupHost(ctx, r.res, r.prof.Address)
+	for _, ip := range ips {
+		if a, ok := netip.AddrFromSlice(ip); ok {
+			out = append(out, a.Unmap())
+		}
+	}
+	return out
+}
+
+// otherServer — IP не из адресов сервера профиля: вывод xm снят на другом сервере (у владельца
+// их несколько, окно легко снять не там). Не IP или адрес профиля не узнать — не судим.
+func (r *run) otherServer(addr string) bool {
+	a, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(addr), "[]"))
+	if err != nil {
+		return false
+	}
+	ips := r.profileIPs()
+	for _, ip := range ips {
+		if ip == a.Unmap() {
+			return false
+		}
+	}
+	return len(ips) > 0
+}
+
+// aliasOther — HostName SSH-алиаса — IP другого сервера (имя без DNS не сверить — не судим).
+func (r *run) aliasOther(alias string) bool {
+	if r.e.SSHConfig == nil || r.prof == nil {
+		return false
+	}
+	cfg := r.e.SSHConfig()
+	if cfg == nil {
+		return false
+	}
+	h, _ := cfg.Resolve(alias)
+	return r.otherServer(h)
 }
 
 func (r *run) bridgeFail(err error) {
@@ -109,7 +173,10 @@ func (r *run) importFile(im Import) {
 			r.note("Импорт " + im.Name + ": " + err.Error())
 			return
 		}
-		r.doctorEvidence(d, "import")
+		if !r.doctorEvidence(d, "import") {
+			r.step(3, "S3", "Импорт xm doctor", "warn", "с другого сервера — не учтено")
+			return
+		}
 		r.step(3, "S3", "Импорт xm doctor", "ok", d.Verdict.Code)
 	case "health":
 		h, err := bridge.ParseHealth(im.Data)
@@ -251,8 +318,16 @@ func (r *run) healthTimeline(h *bridge.Health, f map[string]any) string {
 		len(r.tl.Episodes), match["any"], match["server"], match["freeze"])
 }
 
-func (r *run) doctorEvidence(d *bridge.Doctor, src string) {
+// doctorEvidence — S3 (и S1 из doctor, если фактов моста не было). false — окно снято на другом
+// сервере (его адрес — не адрес профиля): не учитывается, иначе «до сервера ничего не доходит»
+// с чужого сервера выдавалось бы за поведение этого.
+func (r *run) doctorEvidence(d *bridge.Doctor, src string) bool {
 	d.Register(r.red)
+	if r.otherServer(d.Server.ServerIP) {
+		r.note("Окно xm doctor — с другого сервера: адрес в его выводе не совпадает с адресом профиля, окно не учтено")
+		r.missing("doctor_other_server")
+		return false
+	}
 	f := map[string]any{"ok": true, "code": d.Verdict.Code, "live": d.Window(), "source": src, "xver": d.Server.XVer}
 	a, ssh, own, n := d.Pick()
 	f["ssh"], f["own"], f["attempts"] = ssh, own, n
@@ -277,6 +352,7 @@ func (r *run) doctorEvidence(d *bridge.Doctor, src string) {
 		sum += " (" + strings.Join(d.Verdict.Evidence, "; ") + ")"
 	}
 	r.put(evidence.Evidence{ID: "S3", Source: evidence.FromServer, Reliability: evidence.High, Facts: f, Summary: sum})
+	return true
 }
 
 // phaseCapture — C7: pktmon с UAC на время одной попытки клиента.
@@ -341,7 +417,7 @@ func (r *run) phaseCapture(ctx context.Context) {
 // Titles — названия проверок (матрица §6).
 var Titles = map[string]string{
 	"C1": "Hiddify: версия и ядро", "C2": "v2rayN: версия и ядро", "CX": "Ядро активного клиента", "C3": "Профиль",
-	"C5": "URI ↔ профиль в клиенте", "C6": "Логи клиента", "C7": "Захват ClientHello", "C8": "Состояние клиента", "C9": "Локальный прокси", "C10": "Подключение через клиент",
+	"C5": "URI ↔ профиль в клиенте", "C6": "Логи клиента", "C7": "Захват ClientHello", "C8": "Состояние клиента", "C9": "Локальный прокси", "C10": "Подключение через клиент", "C11": "Соединения клиента с сервером",
 	"W1": "Сетевые адаптеры", "W2": "Маршрут к серверу", "W3": "DNS Windows", "W4": "Брандмауэр", "W5": "Антивирус", "W6": "Системный прокси",
 	"W7": "Часы", "W8": "IPv6", "W9": "MTU", "N1": "Интернет", "N2": "Белый список?", "N3": "Подмена DNS", "N4": "Маска по своему адресу",
 	"P1": "TCP до сервера", "P2": "TLS к серверу с SNI маски", "P3": "Эталонное ядро Xray", "P3m": "Эталон без X25519MLKEM768",

@@ -167,7 +167,8 @@ func (r *run) clientEvidence() {
 
 var logTitles = map[string]string{
 	"reality_failed": "reality verification failed", "real_cert": "received real certificate", "invalid_conn": "processed invalid connection",
-	"x509": "чужой сертификат (x509)", "eof": "соединение закрыто (EOF)", "reset": "обрыв (RST)", "refused": "отказ в соединении",
+	"x509": "чужой сертификат (x509)", "eof": "соединение закрыто (EOF)", "reset": "обрыв (RST)",
+	"aborted": "обрыв по тишине (Windows закрыл соединение: сервер не подтверждал данные)", "refused": "отказ в соединении",
 	"timeout": "таймаут", "tun_error": "ошибка TUN", "port_busy": "порт занят", "core_failed": "ядро не запустилось",
 	"empty_fp": "пустой fingerprint", "dns_error": "ошибка DNS", "direct_failed": "сбой прямых проверок клиента (мимо сервера)",
 }
@@ -298,10 +299,17 @@ func (r *run) chooseProfile() {
 		}
 		return nil
 	}
-	// Для v2rayN конфиг запущенного ядра — самое точное; дальше — выбранный профиль.
+	// Для v2rayN конфиг запущенного ядра — самое точное; дальше — сервер, с которым клиент сейчас
+	// соединяется (таблица TCP), и только потом — выбранный профиль (в Hiddify — первый VLESS +
+	// REALITY активного профиля, а выбран в нём может быть другой сервер подписки).
 	r.prof = pick(func(p *profile.Profile) bool { return p.ID == "running" })
 	if r.prof == nil {
-		r.prof = pick(func(p *profile.Profile) bool { return p.Active })
+		active := pick(func(p *profile.Profile) bool { return p.Active })
+		if r.prof = r.byConnections(list); r.prof == nil {
+			r.prof = active
+		} else if active != nil && r.prof != active {
+			r.note("Проверяется сервер, с которым клиент сейчас соединён (по его соединениям), а не первый в активном профиле")
+		}
 	}
 	if r.prof == nil && r.uriProf != nil {
 		r.prof = r.uriProf

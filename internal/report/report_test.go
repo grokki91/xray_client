@@ -262,3 +262,51 @@ func TestStatusUnknownWithFailedStage(t *testing.T) {
 		t.Fatalf("без красного звена: %+v", v.Status)
 	}
 }
+
+// Скрин 8 (2026-11-03): Hiddify «Подключение…», TCP до порта за 7 с, ClientHello то молчит, то
+// проходит (повтор через 30 с получил маску). Звено «Сервер» — «перебои», а не «не проходит»;
+// клиент, который к серверу не шлёт вовсе (C11), — сам красный, а не «следствие» сервера, и итог —
+// «причина в клиенте».
+func TestScreen8Report(t *testing.T) {
+	e, _ := rules.Load()
+	evs := func(c11 string) []evidence.Evidence {
+		l := []evidence.Evidence{
+			{ID: "N1", Facts: map[string]any{"ok": true, "hosts_ok": 4.0, "hosts": 4.0}},
+			{ID: "N4", Facts: map[string]any{"ok": true}},
+			{ID: "CX", Facts: map[string]any{"client": "hiddify", "client_name": "Hiddify 4.1.1", "core": "hiddify-sing-box", "core_mlkem": false}},
+			{ID: "C3", Facts: map[string]any{"found": true, "server_is_ip": true}},
+			{ID: "C10", Facts: map[string]any{"listening": true, "outcome": "fail", "error": "timeout", "shows": "connecting"}},
+			{ID: "P1", Facts: map[string]any{"outcome": "ok", "ms": 7093.0}},
+			{ID: "P3", Facts: map[string]any{"outcome": "handshake_timeout"}},
+			{ID: "P2", Facts: map[string]any{"outcome": "hello_timeout"}},
+			{ID: "P6", Facts: map[string]any{"outcome": "ok", "reach": true, "banner": true, "known": true}},
+			{ID: "P4", Facts: map[string]any{"tcp": "ok", "tls": "mask_cert"}},
+		}
+		if c11 != "" {
+			l = append(l, evidence.Evidence{ID: "C11", Facts: map[string]any{"outcome": c11, "other": 0.0}})
+		}
+		return l
+	}
+	build := func(c11 string) View {
+		set := evidence.FromList(evs(c11))
+		return Build(&engine.SessionData{ID: "20261103-213809-abcd", Started: time.Now(), Client: "hiddify", ClientName: "Hiddify 4.1.1",
+			Evidence: set.All(), Verdict: e.Decide(set)})
+	}
+	v := build("")
+	if srv := v.Stages[1]; srv.State != "fail" || srv.Note != "перебои: ClientHello то без ответа, то проходит" {
+		t.Fatalf("звено «Сервер»: %+v", srv)
+	}
+	if cl := v.Stages[3]; cl.State != "skip" || !strings.Contains(cl.Note, "следствие") {
+		t.Fatalf("без C11 клиент — следствие: %+v", cl)
+	}
+	v = build("none")
+	if v.Code != "client.nosend" || v.Status.Head != "Не работает: причина в клиенте" {
+		t.Fatalf("итог %s: %+v", v.Code, v.Status)
+	}
+	if cl := v.Stages[3]; cl.State != "fail" || !strings.Contains(cl.Note, "к серверу не шлёт") || strings.Contains(cl.Note, "следствие") {
+		t.Fatalf("звено клиента: %+v", cl)
+	}
+	if cl := build("syn").Stages[3]; cl.State != "skip" || !strings.Contains(cl.Note, "SYN к серверу без ответа — следствие") {
+		t.Fatalf("клиент шлёт SYN — следствие сервера: %+v", cl)
+	}
+}

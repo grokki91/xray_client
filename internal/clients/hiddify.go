@@ -37,6 +37,8 @@ type hiddifyPrefs struct {
 	LAN         bool
 	TestURL     string
 	Region      string
+	WARP        bool   // enable-warp
+	WARPDetour  string // warp-detour-mode: proxyOverWarp | warpOverProxy (по умолчанию)
 }
 
 func (h *Hiddify) exeCandidates(env *Env) []string {
@@ -121,6 +123,9 @@ func (h *Hiddify) Detect(ctx context.Context, env *Env) Detection {
 	if pr.Region != "" {
 		d.RUDirect = boolp(pr.Region == "ru")
 	}
+	// «Прокси поверх WARP»: VLESS к серверу идёт внутри WireGuard до Cloudflare (исходник тега v4.1.1:
+	// config_option_repository.dart — enable-warp, warp-detour-mode по имени WarpDetourMode).
+	d.Detour = pr.WARP && pr.WARPDetour == "proxyOverWarp"
 	return d
 }
 
@@ -159,6 +164,12 @@ func (h *Hiddify) prefs(dir string) hiddifyPrefs {
 	}
 	if v, ok := get("region").(string); ok {
 		p.Region = v
+	}
+	if v, ok := get("enable-warp").(bool); ok {
+		p.WARP = v
+	}
+	if v, ok := get("warp-detour-mode").(string); ok {
+		p.WARPDetour = v
 	}
 	return p
 }

@@ -172,12 +172,7 @@ func (r *run) phase2(ctx context.Context) {
 		return
 	}
 	key := r.prof.ServerKey()
-	r.budget = r.e.Budget(key)
-	r.budgetStart = r.budget.Usage()
-	if r.h.Budget != nil {
-		r.budget.OnChange(r.h.Budget)
-		r.h.Budget(r.budget.Usage())
-	}
+	r.serverBudget()
 	if r.e.Store != nil {
 		if lp := r.e.Store.LoadBudget().For(key).LastPath; !lp.IsZero() && r.now().Sub(lp) < 2*time.Minute {
 			r.note("Прошлый сеанс меньше 2 минут назад закончился вердиктом о пути: частые пробы сами похожи на шторм — лучше подождать")
@@ -393,7 +388,8 @@ func (r *run) repeat(ctx context.Context, addr string) {
 	t := netprobe.ProbeTCP(ctx, r.dial, r.budget, addr)
 	f := map[string]any{"tcp": t.Outcome}
 	sum := "Повтор: TCP — " + tcpText(t)
-	if t.Outcome == "ok" && r.budget.Can(netprobe.TLS) {
+	// TLS повтора — без паузы: слот свободен и с учётом хендшейков клиента, иначе только TCP.
+	if t.Outcome == "ok" && r.budget.Can(netprobe.TLS) && r.budget.Wait(netprobe.TLS) == 0 {
 		s := netprobe.ProbeTLS(ctx, r.dial, r.budget, addr, r.prof.SNI, 10*time.Second)
 		f["tls"] = tlsOutcome(s)
 		sum += "; TLS — " + tlsText(s.Outcome, s.CertValid)
@@ -412,13 +408,22 @@ func (r *run) slot(ctx context.Context, k netprobe.Kind, id, title string) bool 
 		return true
 	}
 	secs := int(w.Seconds()) + 1
-	if w > 65*time.Second && !r.confirm(ctx, Consent{Kind: "wait", Text: fmt.Sprintf("К этому серверу только что было несколько проверок. "+
+	// Хендшейки самого клиента (C11) — в том же окне: пауза из-за них объясняется ими.
+	text := fmt.Sprintf("К этому серверу только что было несколько проверок. "+
 		"Чтобы диагностика сама не выглядела как шторм, приложение открывает к серверу не больше %d TLS-соединений в минуту и %d TCP за 5 минут. "+
-		"Следующая проба — через %s. Подождать?", r.budget.TLSMax, r.budget.TCPMax, humanSecs(secs))}) {
+		"Следующая проба — через %s. Подождать?", r.budget.TLSMax, r.budget.TCPMax, humanSecs(secs))
+	pause := fmt.Sprintf("пауза %s: не больше %d TLS к серверу в минуту", humanSecs(secs), r.budget.TLSMax)
+	if u := r.budget.Usage(); k == netprobe.TLS && u.Client > 0 {
+		text = fmt.Sprintf("Клиент сам только что открыл к этому серверу TLS-соединений: %d. Больше %d в минуту к одному адресу вместе с пробами "+
+			"приложения — признак, по которому, по отчётам, замораживают соединения (и клиента тоже). Следующая проба — через %s. Подождать?",
+			u.Client, r.budget.TLSMax, humanSecs(secs))
+		pause = fmt.Sprintf("пауза %s: клиент сам открыл к серверу TLS: %d, вместе с пробами — не больше %d в минуту", humanSecs(secs), u.Client, r.budget.TLSMax)
+	}
+	if w > 65*time.Second && !r.confirm(ctx, Consent{Kind: "wait", Text: text}) {
 		r.note(title + ": пропущено — лимит проб к серверу (повторите диагностику через " + humanSecs(secs) + ")")
 		return false
 	}
-	r.stepWait(2, id, title, secs, fmt.Sprintf("пауза %s: не больше %d TLS к серверу в минуту", humanSecs(secs), r.budget.TLSMax))
+	r.stepWait(2, id, title, secs, pause)
 	select {
 	case <-ctx.Done():
 		return false
@@ -464,7 +469,21 @@ func (r *run) clientTunnel(ctx context.Context) {
 	}
 	r.step(1, "C10", title, "run", "")
 	h := r.hosts()
+	// C11: пока идёт запрос, видно, открывает ли клиент соединения с сервером и проходят ли они
+	// рукопожатие TCP; дальше наблюдение реже — хендшейки клиента идут в бюджет сервера.
+	w := r.watchClient(ctx)
+	t0 := r.now()
 	res := r.e.ProbeClient(ctx, port, h.Tunnel.Probe204, h.Tunnel.Download, h.Tunnel.DownloadBytes, cr.d.TestURL)
+	if w != nil {
+		r.watch = w
+		if rows, err := r.e.Conns(); err == nil {
+			w.scan(rows, false) // последний снимок окна запроса
+		}
+		defer func() {
+			r.connEvidence(w, res, int(r.now().Sub(t0).Seconds()))
+			w.setEvery(connsSlow)
+		}()
+	}
 	f := map[string]any{"listening": true, "outcome": res.Outcome, "ms_204": res.Ms204, "bytes": res.Bytes, "via": via, "port": port}
 	if res.Error != "" {
 		f["error"] = res.Error
@@ -548,20 +567,26 @@ func isHelloFail(o string) bool {
 	return false
 }
 
+// route — через какой адаптер ОС отправит пакет на ip; loop — маршрут ловит чужой TUN/VPN (свой
+// TUN клиент обходит привязкой ядра). nil — не узнать (нет фактов Windows).
+func (r *run) route(ip string) (a *osw.Adapter, viaTun, loop bool) {
+	if !r.facts.Collected {
+		return nil, false, false
+	}
+	if a = r.facts.Adapter(osw.BestInterface(ip)); a == nil {
+		return nil, false, false
+	}
+	viaTun = a.Kind == "tun" || a.Kind == "vpn"
+	clientTun := r.active != nil && r.active.d.TUN
+	return a, viaTun, viaTun && (!clientTun || a.Kind == "vpn")
+}
+
 // routeEvidence — W2: через какой адаптер ОС отправит пакет серверу.
 func (r *run) routeEvidence(ip string) {
-	if !r.facts.Collected {
-		return
-	}
-	idx := osw.BestInterface(ip)
-	a := r.facts.Adapter(idx)
+	a, viaTun, loop := r.route(ip)
 	if a == nil {
 		return
 	}
-	viaTun := a.Kind == "tun" || a.Kind == "vpn"
-	// Петля — маршрут к серверу ловит чужой TUN/VPN; свой TUN клиент обходит привязкой ядра.
-	clientTun := r.active != nil && r.active.d.TUN
-	loop := viaTun && (!clientTun || a.Kind == "vpn")
 	r.put(evidence.Evidence{ID: "W2", Source: evidence.FromOS, Reliability: evidence.Medium,
 		Facts:   map[string]any{"iface_kind": a.Kind, "via_tun": viaTun, "loop": loop},
 		Summary: "Маршрут к серверу: через " + a.Kind + yesno(loop, " — чужой туннель перехватывает соединение с сервером", "")})
@@ -666,6 +691,11 @@ func stepStatus(ok bool) string {
 func tcpText(t netprobe.TCPResult) string {
 	switch t.Outcome {
 	case "ok":
+		// Windows повторяет SYN через 1, 2, 4 с: соединение за 2,5 с и дольше — потеряны два SYN
+		// или SYN-ACK и больше (без потерь — доли секунды).
+		if t.Ms >= 2500 {
+			return fmt.Sprintf("соединение установлено за %d мс — с повторами SYN: пакеты теряются", t.Ms)
+		}
 		return fmt.Sprintf("соединение установлено за %d мс", t.Ms)
 	case "timeout":
 		return "таймаут: ответа на SYN нет"
