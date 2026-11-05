@@ -118,9 +118,8 @@ func TestBridgeAliasOtherServer(t *testing.T) {
 	}
 }
 
-// Мост задан, но не готов (ключ под паролем, sudo, xm без bridge) — сеанс останавливается до
-// первой пробы сети: без моста неоднозначный сбой кончится «без окна сервера не назвать», а
-// чинится это за минуту. SSH не дошёл — улика, сеанс идёт; под TUN клиента — и не улика: ssh.exe
+// Вход по SSH не удался по причине на ПК (ключ, пароль ключа, known_hosts) — сеанс
+// останавливается до первой пробы сети: это чинится за минуту в «Настройках». SSH не дошёл — улика, сеанс идёт; под TUN клиента — и не улика: ssh.exe
 // шёл через тоннель.
 func TestBridgeNotReady(t *testing.T) {
 	if testing.Short() {
@@ -143,7 +142,7 @@ func TestBridgeNotReady(t *testing.T) {
 	var phases []int
 	hooks := Hooks{Progress: func(st Step) { phases = append(phases, st.Phase) }}
 	o := Options{Reference: true, Hosts: testHosts(s), Bridge: "ssh", SkipRepeat: true}
-	for _, f := range []error{bridge.ErrPassphrase, bridge.ErrSudo, bridge.ErrNoBridge, bridge.ErrHostKey} {
+	for _, f := range []error{bridge.ErrPassphrase, bridge.ErrBadPassphrase, bridge.ErrAuth, bridge.ErrHostKey} {
 		fail, phases = f, nil
 		_, err = e.Run(context.Background(), o, hooks)
 		var be *BridgeError
@@ -154,6 +153,15 @@ func TestBridgeNotReady(t *testing.T) {
 			if ph == 1 || ph == 2 {
 				t.Fatalf("%v: пробы сети до готового моста: фазы %v", f, phases)
 			}
+		}
+	}
+	// Скрин 10: вход по SSH есть, а `sudo -n xm bridge` нет (в xm сервера команды bridge пока нет) —
+	// не повод стоять: вход — улика «соединение с сервером есть», сеанс идёт без фактов сервера.
+	for _, f := range []error{bridge.ErrSudo, bridge.ErrNoBridge} {
+		fail = f
+		sess, err := e.Run(context.Background(), Options{Offline: true, Bridge: "ssh"}, Hooks{})
+		if err != nil || evFacts(t, sess, "S0")["ssh"] != "ok" {
+			t.Fatalf("%v: вход есть — сеанс должен идти с S0.ssh=ok: %v", f, err)
 		}
 	}
 	// SSH не дошёл — это улика (адрес режется целиком), сеанс идёт без моста.

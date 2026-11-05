@@ -187,7 +187,7 @@ func BridgeResult(f *bridge.Facts, err error) Item {
 		text  string
 	}{
 		{bridge.ErrNoBridge, Warn, "SSH работает, моста на сервере нет"},
-		{bridge.ErrSudo, Warn, "SSH работает, нет правила sudo"},
+		{bridge.ErrSudo, Warn, "SSH работает, мост на сервере не включён"},
 		{bridge.ErrOlderContract, Warn, "Сервер старее приложения"},
 		{bridge.ErrNewerContract, Warn, "Сервер новее приложения"},
 		{bridge.ErrNoSSH, Bad, "Нет ssh.exe"},

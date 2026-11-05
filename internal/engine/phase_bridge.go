@@ -19,12 +19,12 @@ import (
 	"github.com/grokki91/xray_client/internal/redact"
 )
 
-// BridgeError — мост к серверу профиля задан, но не готов: сеанс остановлен до первой пробы. Без
-// моста сервер виден только снаружи, и неоднозначный сбой кончается «без окна сервера причину не
-// назвать», а такой отказ чинится за минуту — в «Настройках», на ПК или на сервере. Недоступность
-// SSH сюда не входит: это улика (адрес режется целиком), сеанс идёт.
+// BridgeError — SSH сервера профиля задан, но вход не удался по причине на ПК (ключ, пароль
+// ключа, known_hosts, алиас): сеанс остановлен до первой пробы — это чинится за минуту в
+// «Настройках», а вход в сервер — улика «соединение с сервером есть». Недоступность SSH сюда не
+// входит: это тоже улика (адрес режется целиком), сеанс идёт.
 type BridgeError struct {
-	Code  string // bridgeCode: auth, passphrase, host_key, resolve, sudo, no_bridge, older, newer, alias, no_ssh, other_server
+	Code  string // bridgeCode: auth, passphrase, bad_passphrase, askpass, host_key, resolve, alias, no_ssh, other_server
 	Alias string // какой алиас пробовали: окно показывает его в «Настройках», в отчёт и историю он не идёт
 	Err   error
 }
@@ -81,12 +81,14 @@ func (r *run) bridgeStart(ctx context.Context) error {
 	return nil
 }
 
-// bridgeBlocks — отказ моста, который чинится настройкой: ключ, агент, known_hosts, алиас,
-// ssh.exe, sudo, xm. Не останавливают сеанс: SSH не дошёл (улика), нет xm на сервере (сервер не
-// под xm), неизвестная ошибка и имя HostName, которое не резолвится (DNS сети покажут пробы).
+// bridgeBlocks — SSH-вход в сервер профиля не удался по причине на этом ПК: ключ, пароль ключа,
+// known_hosts, алиас, ssh.exe. Не останавливают сеанс: SSH не дошёл (улика); вход есть, а
+// `xm bridge` не ответил — sudo, xm без bridge, контракт (вход — уже улика S0.ssh=ok, сервер
+// чинится не за минуту: в grokki91/xray команды bridge пока нет); неизвестная ошибка; имя
+// HostName, которое не резолвится (DNS сети покажут пробы).
 func (r *run) bridgeBlocks(code, alias string) bool {
 	switch code {
-	case "alias", "no_ssh", "host_key", "auth", "passphrase", "bad_passphrase", "askpass", "sudo", "no_bridge", "newer", "older":
+	case "alias", "no_ssh", "host_key", "auth", "passphrase", "bad_passphrase", "askpass":
 		return true
 	case "resolve":
 		cfg := r.sshConfig()

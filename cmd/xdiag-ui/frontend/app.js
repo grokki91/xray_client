@@ -400,7 +400,7 @@ async function run() {
   } else if (current) renderVerdict(current);
   else idleHero();
   if (bridgeBlock) {
-    // Мост к серверу профиля задан, но не готов: сеанс не начинался — к мосту в «Настройках».
+    // Вход по SSH в сервер профиля не удался по причине на ПК: сеанс не начинался — к мосту в «Настройках».
     showTab("settings");
     $("bridgeItem").scrollIntoView({ block: "center" });
     $("sAlias").focus();
@@ -624,7 +624,7 @@ let profMode = "";      // "" | "edit" — вставляется новый | "
 let bridgeCheck = null; // {alias, item} — последняя проверка моста (до закрытия окна)
 let hasPass = false;    // пароль ключа сохранён (значение в окно не выдаётся)
 let passForget = false; // «Забыть» — удалится при сохранении
-let bridgeBlock = null; // {bridge, alias, field} — «Диагностировать» остановлен: мост сервера профиля не готов
+let bridgeBlock = null; // {bridge, alias, field} — «Диагностировать» остановлен: вход по SSH в сервер профиля не удался
 let cleanForm = null;   // форма как сохранена
 const dirs = { hiddify: "", v2rayn: "" };
 
@@ -718,7 +718,7 @@ function renderStatus(st) {
   const alias = $("sAlias").value.trim();
   if (bridgeBlock && alias === bridgeBlock.field) {
     const via = bridgeBlock.alias && bridgeBlock.alias !== alias ? "Host «" + bridgeBlock.alias + "» сервера профиля из ~/.ssh/config. " : "";
-    b = { ...bridgeBlock.bridge, note: "Диагностика не начиналась: мост к серверу профиля не готов. " + via + (bridgeBlock.bridge.note || "") };
+    b = { ...bridgeBlock.bridge, note: "Диагностика не начиналась: вход по SSH в сервер профиля не удался. " + via + (bridgeBlock.bridge.note || "") };
   } else if (b.state === "idle" && bridgeCheck && bridgeCheck.alias === alias) b = bridgeCheck.item;
   setStat($("stBridge"), b);
   setNote($("stBridgeNote"), b.note);

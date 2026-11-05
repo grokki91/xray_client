@@ -116,7 +116,7 @@ func TestBridge(t *testing.T) {
 	// Звено, на котором остановилось: SSH работает, но на сервере нет моста — это не «не работает».
 	for err, want := range map[error]Item{
 		bridge.ErrNoBridge:                  {State: Warn, Text: "SSH работает, моста на сервере нет"},
-		bridge.ErrSudo:                      {State: Warn, Text: "SSH работает, нет правила sudo"},
+		bridge.ErrSudo:                      {State: Warn, Text: "SSH работает, мост на сервере не включён"},
 		bridge.ErrAuth:                      {State: Bad, Text: "Ключ не принят"},
 		bridge.ErrPassphrase:                {State: Bad, Text: "Ключ с паролем — введите пароль ключа"},
 		bridge.ErrBadPassphrase:             {State: Bad, Text: "Пароль ключа не подошёл"},

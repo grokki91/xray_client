@@ -22,8 +22,8 @@ var (
 	ErrAuth        = errors.New("SSH: ключ не принят (Permission denied) — проверить IdentityFile в ~/.ssh/config и агент")
 	ErrResolve     = errors.New("SSH: алиас не найден — добавить Host <алиас> в ~/.ssh/config")
 	ErrUnreachable = errors.New("SSH: сервер недоступен по SSH (таймаут/отказ) — это тоже улика: адрес режется целиком")
-	ErrSudo        = errors.New("на сервере нет правила sudo без пароля для xm bridge: один раз `sudo xm bridge on`")
-	ErrNoBridge    = errors.New("на сервере xm без команды bridge: `sudo xm self-update` (пока — ручной режим: импорт doctor.json)")
+	ErrSudo        = errors.New("SSH-вход работает, но `sudo -n xm bridge` сервер не выполнил: нет правила sudo без пароля, или в xm нет команды bridge (в grokki91/xray её пока нет) — факты с сервера вручную: `sudo xm doctor --live 60 --json > doctor.json`, затем «Импорт doctor.json»")
+	ErrNoBridge    = errors.New("SSH-вход работает, но в xm на сервере нет команды bridge (в grokki91/xray её пока нет) — факты с сервера вручную: `sudo xm doctor --live 60 --json > doctor.json`, затем «Импорт doctor.json»")
 	// ErrPassphrase — сервер ключ принял, но ключ под паролем: ssh в BatchMode пароль не спрашивает, а
 	// xdiag паролей не вводит и не хранит. Агент Windows держит ключ и после перезагрузки.
 	ErrPassphrase = errors.New("SSH: сервер ключ принял, но ключ защищён паролем — введите его в поле «Пароль ключа» и нажмите «Проверить» " +

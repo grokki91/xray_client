@@ -178,7 +178,7 @@
             <div class="sitem" id="bridgeItem">
               <div class="sline"><b>SSH-мост</b><span id="stBridge" class="stat"></span></div>
               <p class="snote" id="stBridgeNote"></p>
-              <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Если SSH сервера проверяемого профиля задан (здесь или Host в ~/.ssh/config), без готового моста диагностика не начнётся. Вход — по SSH-ключу; пароль ключа xdiag отдаёт ssh.exe сам, как вы в терминале.</p>
+              <p class="hint">Факты с сервера: версия Xray, журнал здоровья и окно <code>xm doctor</code>. Если SSH сервера проверяемого профиля задан (здесь или Host в ~/.ssh/config), диагностика начинается со входа на сервер: вход — улика «соединение с сервером есть», а вход, не удавшийся из-за ключа, — повод сначала исправить его здесь. Вход — по SSH-ключу; пароль ключа xdiag отдаёт ssh.exe сам, как вы в терминале.</p>
               <label class="field">Алиас из ~/.ssh/config
                 <span class="row nowrap">
                   <input id="sAlias" placeholder="например xm-ui" spellcheck="false" autocomplete="off" list="aliasList">
