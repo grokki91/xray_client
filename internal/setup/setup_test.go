@@ -65,12 +65,12 @@ func TestBridgeOffline(t *testing.T) {
 	}
 }
 
-// Алиас не задан: в подсказке — имена Host из ~/.ssh/config (варианты для поля) и то, что SSH
-// сервера диагностика проверит и без алиаса.
+// Алиас не задан: в подсказке — имена Host из ~/.ssh/config (варианты для поля) и то, что мост к
+// серверу профиля диагностика найдёт и без алиаса.
 func TestCheckAliasSuggestions(t *testing.T) {
 	env := &clients.Env{TempDir: t.TempDir()}
 	st := Check(context.Background(), Input{Aliases: []string{"xm-ui", "vps"}}, env, func() error { return nil })
-	if st.Bridge.State != Off || !strings.Contains(st.Bridge.Note, "xm-ui, vps") || !strings.Contains(st.Bridge.Note, "без него") ||
+	if st.Bridge.State != Off || !strings.Contains(st.Bridge.Note, "xm-ui, vps") || !strings.Contains(st.Bridge.Note, "находит сама") ||
 		len(st.Aliases) != 2 {
 		t.Fatalf("%+v", st)
 	}
@@ -118,6 +118,9 @@ func TestBridge(t *testing.T) {
 		bridge.ErrNoBridge:                  {State: Warn, Text: "SSH работает, моста на сервере нет"},
 		bridge.ErrSudo:                      {State: Warn, Text: "SSH работает, нет правила sudo"},
 		bridge.ErrAuth:                      {State: Bad, Text: "Ключ не принят"},
+		bridge.ErrPassphrase:                {State: Bad, Text: "Ключ с паролем — введите пароль ключа"},
+		bridge.ErrBadPassphrase:             {State: Bad, Text: "Пароль ключа не подошёл"},
+		bridge.ErrOtherServer:               {State: Bad, Text: "Алиас от другого сервера"},
 		bridge.ErrResolve:                   {State: Bad, Text: "Алиас не найден"},
 		bridge.ErrUnreachable:               {State: Bad, Text: "Сервер недоступен по SSH"},
 		bridge.ErrOlderContract:             {State: Warn, Text: "Сервер старее приложения"},

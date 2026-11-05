@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -22,23 +24,39 @@ var (
 	ErrUnreachable = errors.New("SSH: сервер недоступен по SSH (таймаут/отказ) — это тоже улика: адрес режется целиком")
 	ErrSudo        = errors.New("на сервере нет правила sudo без пароля для xm bridge: один раз `sudo xm bridge on`")
 	ErrNoBridge    = errors.New("на сервере xm без команды bridge: `sudo xm self-update` (пока — ручной режим: импорт doctor.json)")
+	// ErrPassphrase — сервер ключ принял, но ключ под паролем: ssh в BatchMode пароль не спрашивает, а
+	// xdiag паролей не вводит и не хранит. Агент Windows держит ключ и после перезагрузки.
+	ErrPassphrase = errors.New("SSH: сервер ключ принял, но ключ защищён паролем — введите его в поле «Пароль ключа» и нажмите «Проверить» " +
+		"(или один раз загрузите ключ в ssh-agent: PowerShell от администратора `Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent`, затем `ssh-add`)")
+	// ErrBadPassphrase — пароль ключа из «Настроек» ключ не открыл.
+	ErrBadPassphrase = errors.New("SSH: сервер ключ принял, но пароль ключа не подошёл — проверьте поле «Пароль ключа» (как в терминале при `ssh <алиас>`)")
+	// ErrAskpass — пароль ключа задан, но ssh.exe его не спросил (старый OpenSSH без SSH_ASKPASS).
+	ErrAskpass = errors.New("SSH: ssh.exe не спросил пароль ключа у xdiag (OpenSSH без SSH_ASKPASS?) — загрузите ключ в ssh-agent: PowerShell от администратора " +
+		"`Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent`, затем `ssh-add`")
+	// ErrOtherServer — алиас из «Настроек» ведёт на другой сервер (HostName — не адрес профиля), а Host
+	// сервера профиля в ~/.ssh/config нет: факты и окно были бы про чужой сервер.
+	ErrOtherServer = errors.New("SSH-алиас в «Настройках» ведёт на другой сервер (его HostName — не адрес проверяемого профиля), а Host с адресом этого сервера в ~/.ssh/config нет — " +
+		"укажите алиас сервера этого профиля (адрес — у итога, «сервер …») или очистите поле")
 )
 
 var reAlias = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$`)
 
-// Runner — запуск процесса (подменяется в тестах).
-type Runner func(ctx context.Context, exe string, args []string, stdin []byte) (stdout, stderr []byte, err error)
+// Runner — запуск процесса (подменяется в тестах); env — добавка к окружению процесса.
+type Runner func(ctx context.Context, exe string, args []string, stdin []byte, env []string) (stdout, stderr []byte, err error)
 
 // SSH — мост через системный ssh.exe: ~/.ssh/config, агент и known_hosts — у ОС; приложение
-// ключей не хранит и не читает.
+// ключей не читает. Passphrase — пароль ключа из «Настроек» (DPAPI): его ssh.exe получает от
+// помощника SSH_ASKPASS (Self — этот же exe), как пароль из терминала, но без окна.
 type SSH struct {
-	Alias string
-	Exe   string
-	Run   Runner
+	Alias      string
+	Exe        string
+	Run        Runner
+	Passphrase string
+	Self       string
 }
 
-// NewSSH — мост к алиасу.
-func NewSSH(alias string) (*SSH, error) {
+// NewSSH — мост к алиасу; passphrase — пароль ключа или "" (агент, ключ без пароля).
+func NewSSH(alias, passphrase string) (*SSH, error) {
 	if !reAlias.MatchString(alias) {
 		return nil, ErrAlias
 	}
@@ -46,11 +64,57 @@ func NewSSH(alias string) (*SSH, error) {
 	if err != nil {
 		return nil, ErrNoSSH
 	}
-	return &SSH{Alias: alias, Exe: exe, Run: runProcess}, nil
+	s := &SSH{Alias: alias, Exe: exe, Run: runProcess, Passphrase: passphrase}
+	if passphrase != "" {
+		if s.Self, err = os.Executable(); err != nil {
+			return nil, fmt.Errorf("мост: путь к xdiag для пароля ключа: %v", err)
+		}
+	}
+	return s, nil
+}
+
+// Переменные окружения помощника пароля: метка режима и сам пароль. Окружение процесса видно
+// только этой учётной записи и администратору, командная строка — всем (AGENTS.md).
+const (
+	envAskpass    = "XDIAG_ASKPASS"
+	envPassphrase = "XDIAG_SSH_PASSPHRASE"
+)
+
+// askpassArgs — вместо BatchMode: ssh спрашивает пароль ключа у помощника, а пароль сервера и
+// keyboard-interactive выключены — пароль ключа не уйдёт на сервер даже по ошибке; одна попытка.
+var askpassArgs = []string{"-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no", "-o", "NumberOfPasswordPrompts=1"}
+
+// env — окружение ssh.exe: с паролем ключа — помощник SSH_ASKPASS (этот же exe, AskpassMain).
+func (s *SSH) env() []string {
+	if s.Passphrase == "" || s.Self == "" {
+		return nil
+	}
+	e := []string{"SSH_ASKPASS=" + s.Self, "SSH_ASKPASS_REQUIRE=force", envAskpass + "=1", envPassphrase + "=" + s.Passphrase}
+	if os.Getenv("DISPLAY") == "" {
+		e = append(e, "DISPLAY=xdiag") // OpenSSH до 8.4 без DISPLAY помощника не зовёт
+	}
+	return e
+}
+
+// AskpassMain — режим помощника SSH_ASKPASS: ssh.exe запускает этот же exe с текстом запроса.
+// Отвечает только на «Enter passphrase for key …»: любой другой запрос (пароль сервера, PIN) —
+// отказ. false — процесс не помощник, работает как обычно.
+func AskpassMain(args []string, out io.Writer) (handled bool, code int) {
+	if os.Getenv(envAskpass) != "1" {
+		return false, 0
+	}
+	pass := os.Getenv(envPassphrase)
+	if len(args) == 0 || pass == "" || !strings.Contains(strings.ToLower(args[0]), "passphrase for") {
+		return true, 1
+	}
+	fmt.Fprintln(out, pass)
+	return true, 0
 }
 
 // Args — командная строка ssh. Разрешены только facts, doctor [--live N], health.
-func Args(alias, cmd string, live int) ([]string, error) {
+func Args(alias, cmd string, live int) ([]string, error) { return args(alias, cmd, live, false) }
+
+func args(alias, cmd string, live int, askpass bool) ([]string, error) {
 	if !reAlias.MatchString(alias) {
 		return nil, ErrAlias
 	}
@@ -69,34 +133,64 @@ func Args(alias, cmd string, live int) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("команда %q не из списка моста", cmd)
 	}
-	a := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
-		"-o", "StrictHostKeyChecking=yes", "-T", "--", alias}
+	// -v: по строке «Server accepts key» ключ под паролем отличается от ключа, которого сервер не
+	// знает (classify); stderr нигде не сохраняется.
+	a := []string{"-v", "-o", "BatchMode=yes"}
+	if askpass {
+		// BatchMode пароль ключа не спросит даже у помощника.
+		a = append([]string{"-v"}, askpassArgs...)
+	}
+	a = append(a, "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+		"-o", "StrictHostKeyChecking=yes", "-T", "--", alias)
 	return append(a, remote...), nil
 }
 
 func (s *SSH) call(ctx context.Context, cmd string, live int, stdin []byte, timeout time.Duration) ([]byte, error) {
-	args, err := Args(s.Alias, cmd, live)
+	env := s.env()
+	args, err := args(s.Alias, cmd, live, env != nil)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	out, serr, err := s.Run(ctx, s.Exe, args, stdin)
+	out, serr, err := s.Run(ctx, s.Exe, args, stdin, env)
 	t := bytes.TrimSpace(out)
 	if err != nil || len(t) == 0 || t[0] != '{' {
 		// Без JSON: ошибка ssh/sudo или xm без bridge напечатал справку.
-		return nil, classify(string(serr), string(out), err)
+		return nil, classify(string(serr), string(out), err, env != nil)
 	}
 	return out, nil
 }
 
-// classify — ошибка моста по stderr ssh и xm.
-func classify(stderr, stdout string, err error) error {
-	s := strings.ToLower(stderr + "\n" + stdout)
+// classify — ошибка моста по stderr ssh и xm. Строки отладки ssh (-v) читаются только ради
+// «Server accepts key», остальное — по сообщениям ssh, sudo и xm.
+func classify(stderr, stdout string, err error, askpass bool) error {
+	var msg []string
+	accepted, asked := false, false
+	for _, l := range strings.Split(stderr, "\n") {
+		if t := strings.ToLower(strings.TrimSpace(l)); strings.HasPrefix(t, "debug") {
+			accepted = accepted || strings.Contains(t, "server accepts key")
+			asked = asked || strings.Contains(t, "requested to askpass")
+			continue
+		}
+		msg = append(msg, l)
+	}
+	s := strings.ToLower(strings.Join(msg, "\n") + "\n" + stdout)
 	switch {
 	case strings.Contains(s, "host key verification failed"), strings.Contains(s, "no ecdsa host key"), strings.Contains(s, "host key for"):
 		return ErrHostKey
 	case strings.Contains(s, "permission denied"):
+		// Принятый сервером ключ не подписал: в BatchMode так бывает с ключом под паролем без агента.
+		// Права на файл ключа («bad permissions») — та же пара строк, но другая причина.
+		switch {
+		case !accepted || strings.Contains(s, "bad permissions"):
+		case askpass && asked && !strings.Contains(s, "ssh_askpass"):
+			return ErrBadPassphrase // помощник ответил, ключ не открылся
+		case askpass:
+			return ErrAskpass // ssh.exe не позвал помощника или не смог его запустить
+		default:
+			return ErrPassphrase
+		}
 		return ErrAuth
 	case strings.Contains(s, "could not resolve hostname"):
 		return ErrResolve
@@ -152,7 +246,7 @@ func (s *SSH) Port(ctx context.Context) int {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, _, err := s.Run(ctx, s.Exe, []string{"-G", "--", s.Alias}, nil)
+	out, _, err := s.Run(ctx, s.Exe, []string{"-G", "--", s.Alias}, nil, nil)
 	if err != nil {
 		return 0
 	}

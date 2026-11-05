@@ -90,6 +90,11 @@ type SettingsForm struct {
 	V2rayNDir  string `json:"v2rayn_dir"`
 	// Для сохранения: пустая строка — не менять; "-" — удалить.
 	NewURI string `json:"new_uri"`
+	// Пароль ключа SSH: в форму не выдаётся, только «задан». NewPass — новый (пусто — не менять),
+	// ForgetPass — удалить сохранённый.
+	HasPass    bool   `json:"has_pass"`
+	NewPass    string `json:"new_pass"`
+	ForgetPass bool   `json:"forget_pass"`
 }
 
 func (a *App) Settings() (SettingsForm, error) {
@@ -98,7 +103,7 @@ func (a *App) Settings() (SettingsForm, error) {
 	}
 	v, err := a.st.LoadVault()
 	f := SettingsForm{Settings: a.st.LoadSettings(), HasAlias: v.SSHAlias != "", Alias: v.SSHAlias, HasURI: v.ProfileURI != "",
-		HiddifyDir: v.HiddifyDir, V2rayNDir: v.V2rayNDir}
+		HiddifyDir: v.HiddifyDir, V2rayNDir: v.V2rayNDir, HasPass: v.SSHPassphrase != ""}
 	return f, err
 }
 
@@ -116,6 +121,12 @@ func (a *App) SaveSettings(f SettingsForm) error {
 		}
 	}
 	v.SSHAlias, v.HiddifyDir, v.V2rayNDir = strings.TrimSpace(f.Alias), strings.TrimSpace(f.HiddifyDir), strings.TrimSpace(f.V2rayNDir)
+	switch {
+	case f.ForgetPass:
+		v.SSHPassphrase = ""
+	case f.NewPass != "":
+		v.SSHPassphrase = f.NewPass // как набран: пробелы — часть пароля
+	}
 	switch strings.TrimSpace(f.NewURI) {
 	case "":
 	case "-":
@@ -141,9 +152,6 @@ func (a *App) SaveSettings(f SettingsForm) error {
 		s.LiveSeconds = 60
 	}
 	s.Theme = a.st.LoadSettings().Theme // тема — переключателем (SetTheme), форма её не меняет
-	if v.SSHAlias == "" {
-		s.UseBridge = false // мост без алиаса не запустится
-	}
 	return a.st.SaveSettings(s)
 }
 
@@ -172,12 +180,17 @@ func (a *App) SetupStatus(f SettingsForm) (setup.Status, error) {
 	return setup.Check(a.ctx, in, env, func() error { _, err := exec.LookPath("ssh"); return err }), nil
 }
 
-// CheckBridge — проверка моста по кнопке: ssh → sudo -n xm bridge facts (только чтение). Алиас —
-// из формы, можно до сохранения.
-func (a *App) CheckBridge(alias string) setup.Item {
+// CheckBridge — проверка моста по кнопке: ssh → sudo -n xm bridge facts (только чтение). Алиас и
+// пароль ключа — из формы, можно до сохранения; пароль не набран — сохранённый (forget — без него).
+func (a *App) CheckBridge(alias, pass string, forget bool) setup.Item {
+	if pass == "" && !forget && a.st != nil {
+		if v, err := a.st.LoadVault(); err == nil {
+			pass = v.SSHPassphrase
+		}
+	}
 	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
 	defer cancel()
-	return setup.Bridge(ctx, alias, func(al string) (setup.Facter, error) { return bridge.NewSSH(al) })
+	return setup.Bridge(ctx, alias, func(al string) (setup.Facter, error) { return bridge.NewSSH(al, pass) })
 }
 
 // PickDir — выбор папки клиента в диалоге Windows.
@@ -215,13 +228,20 @@ func (a *App) SetTheme(t string) error {
 // RunRequest — параметры запуска из окна.
 type RunRequest struct {
 	Client  string `json:"client"`
-	Bridge  bool   `json:"bridge"`
 	Capture bool   `json:"capture"`
 	Offline bool   `json:"offline"`
 }
 
+// RunResult — итог «Диагностировать»: вид сеанса или (Bridge) мост к серверу профиля задан, но не
+// готов — сеанс не начинался, окно ведёт в «Настройки» к мосту. Alias — какой алиас пробовали.
+type RunResult struct {
+	View   *report.View `json:"view,omitempty"`
+	Bridge *setup.Item  `json:"bridge,omitempty"`
+	Alias  string       `json:"alias,omitempty"`
+}
+
 // Run — сеанс диагностики. Ход — событиями progress/budget/consent/window.
-func (a *App) Run(req RunRequest) (*report.View, error) {
+func (a *App) Run(req RunRequest) (*RunResult, error) {
 	if a.err != nil {
 		return nil, a.err
 	}
@@ -232,15 +252,10 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 	}
 	o := engine.Options{Client: set.Client, ProfileURI: v.ProfileURI, HiddifyDir: v.HiddifyDir, V2rayNDir: v.V2rayNDir,
 		Reference: set.Reference, LiveSeconds: set.LiveSeconds, Capture: req.Capture, CaptureSecs: 60, Offline: req.Offline,
-		SSHAlias: v.SSHAlias} // алиас без моста — только порт SSH для P6 (`ssh -G`, без подключения)
+		// Мост — к серверу проверяемого профиля, если его SSH задан (алиас или Host в ~/.ssh/config).
+		SSHAlias: v.SSHAlias, SSHPass: v.SSHPassphrase, Bridge: "ssh"}
 	if req.Client != "" {
 		o.Client = req.Client
-	}
-	if req.Bridge {
-		if v.SSHAlias == "" {
-			return nil, errors.New("для моста укажите SSH-алиас в «Настройках»")
-		}
-		o.Bridge = "ssh"
 	}
 	if exe, err := os.Executable(); err == nil {
 		o.SelfExe = exe
@@ -261,6 +276,11 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 		},
 	}
 	sess, err := a.e.Run(ctx, o, hooks)
+	var be *engine.BridgeError
+	if errors.As(err, &be) {
+		it := setup.BridgeResult(nil, be.Err)
+		return &RunResult{Bridge: &it, Alias: be.Alias}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +289,7 @@ func (a *App) Run(req RunRequest) (*report.View, error) {
 	}
 	vw := report.Build(sess)
 	a.lastView = &vw
-	return &vw, nil
+	return &RunResult{View: &vw}, nil
 }
 
 func (a *App) confirm(ctx context.Context, c engine.Consent) bool {
@@ -412,6 +432,9 @@ func (a *App) RevealData(sessionID string) (string, error) {
 	v, err := a.st.LoadVault()
 	if err != nil {
 		return "", err
+	}
+	if v.SSHPassphrase != "" {
+		v.SSHPassphrase = "задан (не показывается)"
 	}
 	return "Каталог: " + a.st.Dir + "\n\nНастройки (settings.json):\n" + pretty(a.st.LoadSettings()) +
 		"\nСекреты (vault.dpapi):\n" + pretty(v), nil

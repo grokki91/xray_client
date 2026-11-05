@@ -2,7 +2,7 @@
 // окна xdiag-ui.
 //
 //	xdiag run [--client auto|hiddify|v2rayn] [--uri-stdin] [--offline] [--no-reference]
-//	          [--bridge | --ssh АЛИАС] [--live СЕК] [--import ФАЙЛ]… [--logs ФАЙЛ]
+//	          [--ssh АЛИАС | --no-bridge] [--live СЕК] [--import ФАЙЛ]… [--logs ФАЙЛ]
 //	          [--capture [--capture-secs СЕК]] [--json] [--yes] [--no-save]
 //	xdiag history [list | show ID [--details] | export ID [--include-address] [--text] | delete ID | clear]
 //	xdiag history replay [ID | --all] [--unchanged] [--json]
@@ -36,6 +36,10 @@ import (
 )
 
 func main() {
+	// Тот же exe — помощник SSH_ASKPASS моста (пароль ключа для ssh.exe).
+	if ok, code := bridge.AskpassMain(os.Args[1:], os.Stdout); ok {
+		os.Exit(code)
+	}
 	consoleUTF8()
 	if len(os.Args) < 2 {
 		usage()
@@ -83,7 +87,8 @@ func usage() {
       --uri-stdin                профиль vless:// из stdin (не из командной строки)
       --offline                  без сети: только клиенты и Windows
       --no-reference             без эталонной пробы Xray-core
-      --bridge | --ssh АЛИАС     мост к серверу: ssh АЛИАС sudo -n xm bridge …
+      --ssh АЛИАС                алиас моста (иначе — из настроек или Host сервера профиля в ~/.ssh/config)
+      --no-bridge                без моста к серверу (по умолчанию он идёт, если SSH сервера задан)
       --live СЕК                 окно xm doctor (10–120, по умолчанию 60)
       --import ФАЙЛ              doctor.json / health.json с сервера (ручной режим)
       --logs ФАЙЛ                экспорт логов клиента (Hiddify: «Логи» → «Скопировать»)
@@ -96,8 +101,8 @@ func usage() {
   xdiag data path                где лежат данные
   xdiag data show [--session ID] показать сохранённое (расшифровка DPAPI)
   xdiag settings show | set КЛЮЧ ЗНАЧЕНИЕ | unset КЛЮЧ
-      ключи: ssh_alias, profile_uri (значение «-» — из stdin), hiddify_dir, v2rayn_dir,
-             client, retention_days, live_seconds, export_include_address, use_bridge, reference
+      ключи: ssh_alias, ssh_passphrase и profile_uri (значение «-» — из stdin), hiddify_dir, v2rayn_dir,
+             client, retention_days, live_seconds, export_include_address, reference
   xdiag bridge-help              команды для сервера (ручной режим)
   xdiag version
 `)
@@ -123,7 +128,7 @@ func cmdRun(args []string) error {
 	uriStdin := fs.Bool("uri-stdin", false, "")
 	offline := fs.Bool("offline", false, "")
 	noRef := fs.Bool("no-reference", false, "")
-	useBridge := fs.Bool("bridge", false, "")
+	noBridge := fs.Bool("no-bridge", false, "")
 	ssh := fs.String("ssh", "", "")
 	live := fs.Int("live", 0, "")
 	var imports multi
@@ -148,7 +153,7 @@ func cmdRun(args []string) error {
 	}
 	o := engine.Options{Client: set.Client, ProfileURI: vault.ProfileURI, HiddifyDir: vault.HiddifyDir, V2rayNDir: vault.V2rayNDir,
 		Offline: *offline, Reference: set.Reference && !*noRef, LiveSeconds: set.LiveSeconds, Capture: *capt, CaptureSecs: *captSecs,
-		SSHAlias: vault.SSHAlias} // алиас без моста — только порт SSH для P6
+		SSHAlias: vault.SSHAlias, SSHPass: vault.SSHPassphrase} // алиас без моста — только порт SSH для P6
 	if *client != "" {
 		o.Client = *client
 	}
@@ -159,14 +164,12 @@ func cmdRun(args []string) error {
 	if *live > 0 {
 		o.LiveSeconds = *live
 	}
-	if *ssh != "" || *useBridge || set.UseBridge {
+	// Мост — к серверу проверяемого профиля, если его SSH задан: алиас (--ssh или настройки) или
+	// Host с адресом сервера в ~/.ssh/config. Задан, но не готов — сеанс не начинается.
+	if !*noBridge {
 		o.Bridge = "ssh"
 		if *ssh != "" {
 			o.SSHAlias = *ssh
-		}
-		if o.SSHAlias == "" {
-			fmt.Fprintln(os.Stderr, "Мост: SSH-алиас не задан (xdiag settings set ssh_alias xm-ui) — без моста")
-			o.Bridge = ""
 		}
 	}
 	for _, f := range imports {
@@ -451,6 +454,9 @@ func cmdData(args []string) error {
 		fmt.Println("\nНастройки (settings.json):")
 		fmt.Print(pretty2(st.LoadSettings(), "  "))
 		fmt.Println("\nСекреты (vault.dpapi, расшифровано для вас):")
+		if v.SSHPassphrase != "" {
+			v.SSHPassphrase = "задан (не показывается)"
+		}
 		fmt.Print(pretty2(v, "  "))
 		fmt.Printf("\nСеансов в истории: %d (xdiag data show --session ID)\n", len(st.Sessions()))
 	default:
@@ -481,7 +487,8 @@ func cmdSettings(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("ssh_alias: %s\nprofile_uri: %s\nhiddify_dir: %s\nv2rayn_dir: %s\n", mark(v.SSHAlias), mark(v.ProfileURI), mark(v.HiddifyDir), mark(v.V2rayNDir))
+		fmt.Printf("ssh_alias: %s\nssh_passphrase: %s\nprofile_uri: %s\nhiddify_dir: %s\nv2rayn_dir: %s\n", mark(v.SSHAlias), mark(v.SSHPassphrase),
+			mark(v.ProfileURI), mark(v.HiddifyDir), mark(v.V2rayNDir))
 		fmt.Println("(значения секретов: xdiag data show)")
 		return nil
 	}
@@ -491,6 +498,9 @@ func cmdSettings(args []string) error {
 	key, val := args[1], ""
 	if args[0] == "set" {
 		val = args[2]
+		if key == "ssh_passphrase" && val != "-" {
+			return errors.New("ssh_passphrase — только из stdin (значение «-»): командную строку видят все процессы")
+		}
 		if val == "-" {
 			b, _ := io.ReadAll(io.LimitReader(os.Stdin, 64<<10))
 			val = strings.TrimSpace(string(b))
@@ -523,6 +533,8 @@ func applySetting(st *store.Store, key, val string) error {
 			}
 		}
 		v.SSHAlias = val
+	case "ssh_passphrase":
+		v.SSHPassphrase = val
 	case "profile_uri":
 		v.ProfileURI = val
 	case "hiddify_dir":
@@ -560,12 +572,6 @@ func applySetting(st *store.Store, key, val string) error {
 			return err
 		}
 		s.ExportIncludeAddress = x
-	case "use_bridge":
-		x, err := b()
-		if err != nil {
-			return err
-		}
-		s.UseBridge = x
 	case "reference":
 		x, err := b()
 		if err != nil {
@@ -590,9 +596,9 @@ func cmdBridgeHelp() {
 
 Автоматический мост (когда на сервере появится xm bridge): один раз на сервере
   sudo xm bridge on
-и на ПК
+и на ПК — Host сервера в ~/.ssh/config (HostName — адрес из профиля) или
   xdiag settings set ssh_alias <алиас из ~/.ssh/config>
-  xdiag run --bridge`)
+  xdiag run`)
 }
 
 func cmdHello(args []string) error {

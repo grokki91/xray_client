@@ -48,8 +48,9 @@ type Options struct {
 	Offline   bool // только фаза 0
 	Reference bool // эталонная проба P3/P3m
 
-	Bridge      string       // "" | "ssh"
-	SSHAlias    string       // алиас из ~/.ssh/config: мост (Bridge=ssh) и порт SSH для P6
+	Bridge      string       // "" | "ssh": мост к серверу профиля, если его SSH задан (алиас или Host в ~/.ssh/config)
+	SSHAlias    string       // алиас из «Настроек»: мост, если ведёт на сервер профиля, и порт SSH для P6
+	SSHPass     string       // пароль ключа SSH (секрет; vault): ssh.exe получает его от помощника SSH_ASKPASS
 	LiveSeconds int          // окно xm doctor
 	Imports     []Import     // файлы xm (ручной мост)
 	PastedLogs  string       // экспорт логов клиента
@@ -101,7 +102,7 @@ type Engine struct {
 
 	CollectOS func(ctx context.Context, exe []string) osw.Facts
 	NewEnv    func(f *osw.Facts) *clients.Env
-	NewSSH    func(alias string) (SSHBridge, error)
+	NewSSH    func(alias, passphrase string) (SSHBridge, error)
 	RunRef    func(ctx context.Context, o refcore.Options) refcore.Result
 	Capture   func(ctx context.Context, job string, selfExe string) error
 	Resolver  *net.Resolver // nil — системный (тесты подставляют свой)
@@ -162,9 +163,9 @@ func New(st *store.Store) (*Engine, error) {
 	e := &Engine{Rules: re, Store: st, Adapters: clients.All(), CollectOS: osw.Collect, RunRef: refcore.Run,
 		LocalOpen: netprobe.LocalListening, ProbeClient: netprobe.ProbeViaClient, Conns: osw.TCPTable}
 	e.NewEnv = func(f *osw.Facts) *clients.Env { return clients.DefaultEnv(f, re.Compat) }
-	e.NewSSH = func(alias string) (SSHBridge, error) { return bridge.NewSSH(alias) }
+	e.NewSSH = func(alias, pass string) (SSHBridge, error) { return bridge.NewSSH(alias, pass) }
 	e.SSHPort = func(ctx context.Context, alias string) int {
-		s, err := bridge.NewSSH(alias)
+		s, err := bridge.NewSSH(alias, "")
 		if err != nil {
 			return 0
 		}
@@ -246,6 +247,8 @@ type run struct {
 	serverIP []net.IP
 	mu       sync.Mutex
 
+	br SSHBridge // мост к серверу профиля, если факты (bridgeStart) пришли; журнал и окно — в фазе 3
+
 	budget      *netprobe.Budget // бюджет сервера профиля (фаза 2)
 	budgetStart netprobe.Usage   // расход на начало сеанса — в отчёт идёт разница
 
@@ -308,6 +311,7 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 	for _, hst := range r.hosts().PublicHosts() {
 		r.red.Keep(hst)
 	}
+	r.red.Add(redact.Other, o.SSHPass)
 	defer func() {
 		r.watch.stop()
 		if r.budget != nil {
@@ -316,6 +320,11 @@ func (e *Engine) Run(ctx context.Context, o Options, h Hooks) (*SessionData, err
 	}()
 
 	r.phase0(ctx)
+	// Мост — до сетевых проб: профиль уже известен (фаза 0), и неготовый мост его сервера
+	// останавливает сеанс, пока к серверу не ушло ни одной пробы.
+	if err := r.bridgeStart(ctx); err != nil {
+		return nil, err
+	}
 	if !o.Offline && ctx.Err() == nil {
 		r.phase1(ctx)
 		if ctx.Err() == nil {

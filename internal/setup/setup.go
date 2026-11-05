@@ -2,7 +2,7 @@
 //
 // Без сети и без PowerShell — профиль из настроек (разбор и Validate), SSH-алиас и ssh.exe,
 // папки клиентов (адаптеры Detect по файлам). По кнопке — мост: ssh → sudo -n xm bridge facts
-// (только чтение, как фаза 3). Тексты — без секретов: профиль описан протоколом, транспортом и
+// (только чтение, как перед диагностикой). Тексты — без секретов: профиль описан протоколом, транспортом и
 // проблемами, не значениями; результат проверки нигде не сохраняется.
 package setup
 
@@ -70,9 +70,9 @@ type Status struct {
 func Check(ctx context.Context, in Input, env *clients.Env, lookSSH func() error) Status {
 	b := BridgeOffline(in.SSHAlias, lookSSH)
 	if b.State == Off {
-		// SSH того же адреса диагностика проверяет и без алиаса — по Host с адресом сервера в
-		// ~/.ssh/config; алиас в настройках нужен мосту (факты с сервера).
-		b.Note = "SSH сервера диагностика проверяет и без него — по Host с адресом сервера в ~/.ssh/config. Для фактов с сервера (мост) выберите алиас"
+		// Мост к серверу профиля диагностика находит и без алиаса — Host с адресом сервера в
+		// ~/.ssh/config; алиас нужен, когда HostName там записан не так, как адрес в профиле.
+		b.Note = "Мост к серверу профиля диагностика находит сама — Host из ~/.ssh/config, у которого HostName — адрес из профиля. Алиас — если HostName там не такой, как в профиле (имя вместо IP)"
 		if n := len(in.Aliases); n > 0 {
 			l := in.Aliases
 			if n > 5 {
@@ -80,7 +80,7 @@ func Check(ctx context.Context, in Input, env *clients.Env, lookSSH func() error
 			}
 			b.Note += ": в ~/.ssh/config есть " + strings.Join(l, ", ") + yesNo(n > 5, " …", "")
 		}
-		b.Note += ". Без моста факты с сервера — импортом doctor.json (вкладка «Данные»)."
+		b.Note += ". Без SSH факты с сервера — импортом doctor.json (вкладка «Данные»)."
 	}
 	return Status{Profile: Profile(in.ProfileURI), Bridge: b, Clients: Clients(ctx, env, in), Aliases: in.Aliases}
 }
@@ -154,7 +154,7 @@ type Facter interface {
 	Facts(ctx context.Context, saltHex string) (*bridge.Facts, error)
 }
 
-// Bridge — проверка моста по кнопке: тот же `xm bridge facts`, что в фазе 3, со случайной солью.
+// Bridge — проверка моста по кнопке: тот же `xm bridge facts`, что перед диагностикой (bridgeStart), со случайной солью.
 func Bridge(ctx context.Context, alias string, dial func(alias string) (Facter, error)) Item {
 	if it := BridgeOffline(alias, nil); it.State == Off || it.State == Bad {
 		return it
@@ -194,7 +194,11 @@ func BridgeResult(f *bridge.Facts, err error) Item {
 		{bridge.ErrAlias, Bad, "Неверный алиас"},
 		{bridge.ErrResolve, Bad, "Алиас не найден"},
 		{bridge.ErrHostKey, Bad, "Ключ хоста не подтверждён"},
+		{bridge.ErrPassphrase, Bad, "Ключ с паролем — введите пароль ключа"},
+		{bridge.ErrBadPassphrase, Bad, "Пароль ключа не подошёл"},
+		{bridge.ErrAskpass, Bad, "ssh.exe не спросил пароль ключа"},
 		{bridge.ErrAuth, Bad, "Ключ не принят"},
+		{bridge.ErrOtherServer, Bad, "Алиас от другого сервера"},
 		{bridge.ErrUnreachable, Bad, "Сервер недоступен по SSH"},
 	} {
 		if errors.Is(err, c.err) {

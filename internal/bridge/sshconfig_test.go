@@ -79,6 +79,18 @@ Host *
 	if _, port, ok := g.Find("203.0.113.7"); !ok || port != 2200 {
 		t.Errorf("глобальный Port: %d %v", port, ok)
 	}
+	// Алиас моста — только имя: «Host 203.0.113.30» (сам адрес) для командной строки ssh.exe не
+	// берётся, и поиск идёт дальше — до имени с тем же HostName.
+	n := ReadSSHConfig(writeCfg(t, dir, "named", "Host 203.0.113.30\n  User root\nHost nl\n  HostName 203.0.113.30\n"))
+	if al, ok := n.FindName("203.0.113.30"); !ok || al != "nl" {
+		t.Errorf("алиас моста: %q %v", al, ok)
+	}
+	if al, _, _ := n.Find("203.0.113.30"); al != "203.0.113.30" {
+		t.Errorf("Find (порт P6) берёт и адрес: %q", al)
+	}
+	if _, ok := ReadSSHConfig(writeCfg(t, dir, "ip", "Host 203.0.113.30\n")).FindName("203.0.113.30"); ok {
+		t.Error("Host — сам адрес: мосту не годится")
+	}
 	// Нет файла — пустой конфиг, не ошибка.
 	if _, _, ok := ReadSSHConfig(filepath.Join(dir, "нет")).Find("203.0.113.7"); ok {
 		t.Error("нет файла")
