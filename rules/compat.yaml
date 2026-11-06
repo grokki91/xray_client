@@ -1,9 +1,9 @@
 # Совместимость ядер клиентов с правилом X25519MLKEM768 сервера (REALITY ≥ v26.9.9).
-# Источник — grokki91/xray, .claude/skills/xray-dpi/references/landscape.md (проверено 2026-10-28).
+# Источник — grokki91/xray, .claude/skills/xray-dpi/references/landscape.md (проверено 2026-11-06).
 # Правка факта — в обоих местах, с датой (AGENTS.md: «инструкции меняются вместе с кодом»).
 # Когда сервер доступен через мост, клиент доверяет серверу (S1.mlkem_rule), а не этой таблице.
 
-updated: "2026-10-28"
+updated: "2026-11-06"
 source: "landscape.md#Клиенты"
 
 server:
@@ -32,17 +32,20 @@ xray_bug6797_from: "26.9.8"
 clients:
   hiddify:
     # Все релизы 4.x: ядро hiddify-sing-box (форк sing-box 1.13) вырезает X25519MLKEM768
-    # (common/tls/reality_client.go). Исправление — ветка v5, в релиз не вышло.
+    # (common/tls/reality_client.go). Исправлено в 5.x: первый тег — v5.2.0 (2026-10-30).
     - versions: "<5.0.0"
       core: "hiddify-sing-box"
       core_family: "sing-box"
       mlkem: false
       note: "Hiddify 4.x: ядро sing-box вырезает X25519MLKEM768 из ClientHello REALITY"
+    # 5.x (v5.2.0, v5.5.5): common/tls/h_reality_hello.go ставит X25519MLKEM768 перед X25519 в
+    # supported_groups и key_share при любом fp (key_share "hybrid" по умолчанию; "classical" —
+    # без неё, в окне приложения опции нет). По исходнику; на машине не проверено.
     - versions: ">=5.0.0"
       core: "hiddify-sing-box v5"
       core_family: "sing-box"
-      mlkem: null   # неизвестно до релиза: частичная поддержка
-      note: "Hiddify 5.x: ветка с опцией key_share X25519MLKEM768 — проверить на машине"
+      mlkem: true
+      note: "Hiddify 5.x: ядро шлёт X25519MLKEM768 перед X25519 при любом fp (по исходнику)"
   v2rayn:
     # Ядро определяет профиль (CoreType) или таблица CoreTypeItem; по умолчанию Xray.
     cores:

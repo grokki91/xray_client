@@ -267,6 +267,12 @@
     `KbdInteractiveAuthentication=no`, одна попытка; помощник отвечает только на «passphrase for».
     Проверено на OpenSSH 9.6 (тест со sshd); `SSH_ASKPASS` у OpenSSH для Windows — не проверен.
 
+20. **Hiddify 5.x (с v5.2.0, 2026-10-30) шлёт X25519MLKEM768** — `compat.yaml`: `mlkem: true`. Ядро
+    (hiddify-sing-box 7d1760f в v5.2.0, 1614c5e в v5.5.5, `common/tls/h_reality_hello.go`) ставит
+    её перед X25519 при любом fp, поэтому у чужих ядер `CX.fp_mlkem` берётся из таблицы ядра, а не
+    из пресета, и P3m не идёт. Каталог данных v5.5.5 по исходнику тот же (`configs\<id>.json`,
+    `shared_preferences.json`). Не проверено на машине: ни ClientHello, ни адаптер на 5.x.
+
 ## Контракт хэшей профиля (для `xm bridge facts`)
 
 Соль — 16 случайных байт сессии, на сервер уходит hex (32 символа) через stdin. Хэш —
