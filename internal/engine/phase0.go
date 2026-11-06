@@ -403,7 +403,7 @@ func (r *run) clientCore() {
 		}
 	}
 	if mlkem == nil && d.Client == "hiddify" && d.Version == "" {
-		no := false // все вышедшие релизы Hiddify — sing-box без X25519MLKEM768
+		no := false // версия не определена — считаем 4.x; 5.x с долей опровергнет окно сервера (S3.rd_r=ok)
 		mlkem = &no
 	}
 	name := r.active.a.Title()
@@ -421,7 +421,9 @@ func (r *run) clientCore() {
 		}
 		f["bug6797"] = c.Bug6797(ver)
 	default:
-		f["fp_mlkem"] = false
+		// Чужое ядро: долю решает само ядро, а не пресет. Hiddify 5.x ставит X25519MLKEM768 при
+		// любом fp; ядра без неё (sing-box, Hiddify 4.x) её не шлют ни с каким.
+		f["fp_mlkem"] = mlkem != nil && *mlkem
 	}
 	if cm, ok := f["core_mlkem"].(bool); ok {
 		if fm, ok := f["fp_mlkem"].(bool); ok {

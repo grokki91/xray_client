@@ -226,8 +226,8 @@ func TestCompat(t *testing.T) {
 	if r, ok := c.Hiddify("4.1.2"); !ok || r.Mlkem == nil || *r.Mlkem || r.CoreFamily != "sing-box" {
 		t.Fatalf("hiddify 4.1.2: %+v", r)
 	}
-	if r, ok := c.Hiddify("5.0.1"); !ok || r.Mlkem != nil {
-		t.Fatalf("hiddify 5: %+v", r)
+	if r, ok := c.Hiddify("5.5.5"); !ok || r.Mlkem == nil || !*r.Mlkem || r.CoreFamily != "sing-box" {
+		t.Fatalf("hiddify 5.5.5: %+v", r)
 	}
 	for _, x := range []struct {
 		ver, fp   string

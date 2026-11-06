@@ -232,6 +232,51 @@ func TestHiddifyAgainstMlkemServer(t *testing.T) {
 	}
 }
 
+// Hiddify 5.x (v5.2.0, v5.5.5) ставит X25519MLKEM768 при любом fp: тот же стенд не даёт ни
+// «ядро без X25519MLKEM768», ни «fp без неё», а P3m не тратит TLS — его исход ничего не меняет.
+func TestHiddify5SendsMlkem(t *testing.T) {
+	if testing.Short() {
+		t.Skip("сетевой симулятор")
+	}
+	s, err := sim.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	root := t.TempDir()
+	hiddifyDir(t, s, root)
+	e := testEngine(t, s, root)
+	env := e.NewEnv
+	e.NewEnv = func(f *osw.Facts) *clients.Env {
+		c := env(f)
+		c.FileVersion = func(p string) string {
+			if strings.HasSuffix(p, "Hiddify.exe") {
+				return "5.5.5"
+			}
+			return ""
+		}
+		return c
+	}
+	sess, err := e.Run(context.Background(), Options{Reference: true, Hosts: testHosts(s), SkipRepeat: true}, Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cx := evFacts(t, sess, "CX"); cx["core_mlkem"] != true || cx["fp_mlkem"] != true || cx["mlkem"] != true {
+		t.Fatalf("CX: %v", cx)
+	}
+	for _, x := range sess.Evidence {
+		if x.ID == "P3m" {
+			t.Fatalf("P3m при ядре с X25519MLKEM768: %v", x.Facts)
+		}
+	}
+	if c := sess.Verdict.Main.Code; c == "client.core.mlkem" || c == "profile.fp" {
+		t.Fatalf("вердикт %s при Hiddify 5.5.5", c)
+	}
+	if sess.Budget.TotalTLS != 1 {
+		t.Fatalf("бюджет: %+v", sess.Budget)
+	}
+}
+
 // Профиль из настроек, клиентов нет, сервер пускает — «работает».
 func TestProfileOnlyOK(t *testing.T) {
 	if testing.Short() {
