@@ -717,7 +717,12 @@ function renderStatus(st) {
   let b = st.bridge;
   const alias = $("sAlias").value.trim();
   if (bridgeBlock && alias === bridgeBlock.field) {
-    const via = bridgeBlock.alias && bridgeBlock.alias !== alias ? "Host «" + bridgeBlock.alias + "» сервера профиля из ~/.ssh/config. " : "";
+    // Алиас поля ведёт на другой сервер: проверяется профиль клиента, а не vless:// «Настроек».
+    const from = bridgeBlock.profile ? " (профиль из " + bridgeBlock.profile + ")" : "";
+    const via = bridgeBlock.alias && bridgeBlock.alias !== alias
+      ? "«" + alias + "» ведёт на другой сервер, чем проверяемый" + from + ", — взят Host «" + bridgeBlock.alias + "» с его адресом из ~/.ssh/config. " +
+        (bridgeBlock.profile && bridgeBlock.profile !== "настройки xdiag" ? "Профиль клиента важнее vless:// «Настроек»: выберите в клиенте нужный сервер. " : "")
+      : "";
     b = { ...bridgeBlock.bridge, note: "Диагностика не начиналась: мост к серверу профиля не готов. " + via + (bridgeBlock.bridge.note || "") };
   } else if (b.state === "idle" && bridgeCheck && bridgeCheck.alias === alias) b = bridgeCheck.item;
   setStat($("stBridge"), b);

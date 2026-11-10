@@ -103,12 +103,25 @@ func TestBridgeAliasOtherServer(t *testing.T) {
 	if strings.Join(dialed, ",") != "here" || sess.Bridge != "ssh" {
 		t.Fatalf("алиас настроек сервера профиля: %v %q", dialed, sess.Bridge)
 	}
+	// Живой случай 2026-11-10: в «Настройках» — алиас и vless:// другого сервера, а в Hiddify выбран
+	// прежний; мост к Host прежнего не готов (sudo). Окну нужно знать, что профиль — из Hiddify:
+	// иначе «Host … сервера профиля» при своём алиасе и своём vless:// непонятен.
+	e.NewSSH = func(alias, _ string) (SSHBridge, error) {
+		dialed = append(dialed, alias)
+		return &fakeBridge{prof: p, err: bridge.ErrSudo}, nil
+	}
+	dialed = nil
+	_, err = e.Run(context.Background(), Options{Offline: true, Bridge: "ssh", SSHAlias: "other", ProfileURI: "vless://00000000-0000-4000-8000-000000000001@198.51.100.20:443?security=reality&pbk=x&sni=example.com#n"}, Hooks{})
+	var bs *BridgeError
+	if !errors.As(err, &bs) || bs.Alias != "here" || bs.Profile != "Hiddify" || strings.Join(dialed, ",") != "here" {
+		t.Fatalf("мост к Host профиля Hiddify при чужом алиасе и vless://: %v, мост %v", err, dialed)
+	}
 	// Своего Host у сервера профиля нет: мост не к кому — в «Настройки», к серверу ни одного SSH.
 	write(t, cfg, "Host other\n  HostName 198.51.100.20\n")
 	dialed = nil
 	_, err = e.Run(context.Background(), Options{Offline: true, Bridge: "ssh", SSHAlias: "other"}, Hooks{})
 	var be *BridgeError
-	if !errors.As(err, &be) || be.Code != "other_server" || be.Alias != "other" || !errors.Is(err, bridge.ErrOtherServer) || len(dialed) > 0 {
+	if !errors.As(err, &be) || be.Code != "other_server" || be.Alias != "other" || be.Profile != "Hiddify" || !errors.Is(err, bridge.ErrOtherServer) || len(dialed) > 0 {
 		t.Fatalf("алиас другого сервера без своего Host: %v, мост %v", err, dialed)
 	}
 	// Алиаса нет и Host сервера нет: SSH не задан — сеанс без моста, как раньше.

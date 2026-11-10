@@ -233,11 +233,13 @@ type RunRequest struct {
 }
 
 // RunResult — итог «Диагностировать»: вид сеанса или (Bridge) мост к серверу профиля задан, но не
-// готов — сеанс не начинался, окно ведёт в «Настройки» к мосту. Alias — какой алиас пробовали.
+// готов — сеанс не начинался, окно ведёт в «Настройки» к мосту. Alias — какой алиас пробовали,
+// Profile — откуда проверяемый профиль (клиент или «Настройки»).
 type RunResult struct {
-	View   *report.View `json:"view,omitempty"`
-	Bridge *setup.Item  `json:"bridge,omitempty"`
-	Alias  string       `json:"alias,omitempty"`
+	View    *report.View `json:"view,omitempty"`
+	Bridge  *setup.Item  `json:"bridge,omitempty"`
+	Alias   string       `json:"alias,omitempty"`
+	Profile string       `json:"profile,omitempty"`
 }
 
 // Run — сеанс диагностики. Ход — событиями progress/budget/consent/window.
@@ -279,7 +281,7 @@ func (a *App) Run(req RunRequest) (*RunResult, error) {
 	var be *engine.BridgeError
 	if errors.As(err, &be) {
 		it := setup.BridgeResult(nil, be.Err)
-		return &RunResult{Bridge: &it, Alias: be.Alias}, nil
+		return &RunResult{Bridge: &it, Alias: be.Alias, Profile: be.Profile}, nil
 	}
 	if err != nil {
 		return nil, err

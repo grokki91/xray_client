@@ -26,7 +26,11 @@ import (
 type BridgeError struct {
 	Code  string // bridgeCode: auth, passphrase, host_key, resolve, sudo, no_bridge, older, newer, alias, no_ssh, other_server
 	Alias string // какой алиас пробовали: окно показывает его в «Настройках», в отчёт и историю он не идёт
-	Err   error
+	// Profile — откуда профиль, к серверу которого мост: «Hiddify», «v2rayN», «настройки xdiag».
+	// Профиль клиента важнее vless:// из «Настроек»: без этого «Host … сервера профиля» при другом
+	// алиасе и заменённом vless:// непонятен.
+	Profile string
+	Err     error
 }
 
 func (e *BridgeError) Error() string {
@@ -46,7 +50,7 @@ func (r *run) bridgeStart(ctx context.Context) error {
 		if other {
 			// Факты и окно были бы про чужой сервер: сверка хэшей «уличила» бы профиль, который
 			// здесь ни при чём.
-			return &BridgeError{Code: "other_server", Alias: r.o.SSHAlias, Err: bridge.ErrOtherServer}
+			return &BridgeError{Code: "other_server", Alias: r.o.SSHAlias, Profile: r.profFrom(), Err: bridge.ErrOtherServer}
 		}
 		return nil
 	}
@@ -68,7 +72,7 @@ func (r *run) bridgeStart(ctx context.Context) error {
 	if err != nil {
 		if code := bridgeCode(err); r.bridgeBlocks(code, alias) && ctx.Err() == nil {
 			r.step(3, "S1", "Сервер: мост SSH", "fail", err.Error())
-			return &BridgeError{Code: code, Alias: alias, Err: err}
+			return &BridgeError{Code: code, Alias: alias, Profile: r.profFrom(), Err: err}
 		}
 		r.bridgeFail(err)
 		return nil
@@ -121,6 +125,22 @@ func (r *run) bridgeAlias() (alias string, other bool) {
 		return a, false
 	}
 	return "", other
+}
+
+// profFrom — откуда проверяемый профиль, для окна: клиент или «Настройки».
+func (r *run) profFrom() string {
+	if r.prof == nil {
+		return ""
+	}
+	switch r.prof.Source {
+	case "hiddify":
+		return "Hiddify"
+	case "v2rayn":
+		return "v2rayN"
+	case "uri":
+		return "настройки xdiag"
+	}
+	return r.prof.Source
 }
 
 func (r *run) sshConfig() *bridge.SSHConfig {
